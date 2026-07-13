@@ -13,7 +13,7 @@
   try{
     const [base,b64]=await Promise.all([
       fetch('./base-v34.html?base=34').then(r=>{if(!r.ok)throw new Error('No se encontró la base v34');return r.text()}),
-      fetch('./.deploy/v34_to_v42.patch.gz.b64?patch=42').then(r=>{if(!r.ok)throw new Error('No se encontró el parche v42');return r.text()})
+      fetch('./v34_to_v42.patch.gz.b64?patch=42').then(r=>{if(!r.ok)throw new Error('No se encontró el parche v42');return r.text()})
     ]);
     const bin=Uint8Array.from(atob(b64.trim()),c=>c.charCodeAt(0));
     const patch=await new Response(new Blob([bin]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
