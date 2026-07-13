@@ -1,0 +1,50 @@
+name: Deploy index from payload
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.deploy/READY'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Rebuild index.html
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import base64, gzip
+
+          parts = sorted(Path('.deploy').glob('index.html.gz.b64.part-*'))
+          if not parts:
+              raise SystemExit('No payload parts found')
+
+          encoded = ''.join(p.read_text(encoding='ascii').strip() for p in parts)
+          html = gzip.decompress(base64.b64decode(encoded))
+          Path('index.html').write_bytes(html)
+          print(f'Rebuilt index.html: {len(html):,} bytes from {len(parts)} parts')
+          PY
+
+      - name: Commit index.html
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          if git diff --cached --quiet; then
+            echo "index.html is already up to date"
+            exit 0
+          fi
+          git commit -m "feat: publish v42 multipasillo ABC as index"
+          git push origin main
