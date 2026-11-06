@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#071225">
 <meta name="slotting-baseline" content="FAVORITA-v14-v18-v19-v20-v21-v22-v23-progress-safe-render">
-<title>Sistema de Slotting 3D Inteligente · v66 · Simulación con tiempo real del proceso</title>
+<title>Sistema de Slotting 3D Inteligente · v67 · Demoras visibles (picker parado)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300,0,0" rel="stylesheet">
@@ -6845,37 +6845,61 @@ body.in-sharepoint .inicio-grid{min-height:calc(var(--sp-app-height,78dvh) - 152
       ev.sort((a, b) => a.m - b.m);
       const plan = realOn ? realPlan(trk, dd, o) : null;
       const a = {trk, key: scnKey(trk), path, at: sampler(path), v: plan ? plan.v : trkV(trk), start: plan ? plan.depart : o.startTs, total: path.total, dir: {x: 1, z: 0}, delay: 0, real: !!plan};
-      if(plan && a.key === 'actual'){
-        // Cada tramo se ajusta al intervalo REAL entre confirmaciones: caminata + picking = intervalo. Si el intervalo es más
-        // corto que "pickSec + caminata a 3 m/s", el picking se acorta (mínimo 8 s) en vez de arrastrar atraso; si sobra
-        // mucho tiempo (> caminata a 0,35 m/s), espera en la ubicación.
-        const VMIN = .35, VMAX = 3, MINPICK = 8;
+      if(plan){
+        // Cada tramo del ACTUAL se ajusta al intervalo REAL entre confirmaciones (caminata + picking = intervalo):
+        //  · si sobra mucho tiempo respecto de caminar a la velocidad normal de la orden, camina normal y queda PARADO
+        //    en la ubicación (estado 5: conversación, espera, etc.) por el excedente, para que se vea dónde demoró;
+        //  · si el intervalo es más corto que "pickSec + caminata a 3 m/s", el picking se acorta (mín. 8 s).
+        // El futuro y "por secuencia" conservan las mismas demoras (mismo picker, misma manipulación), una por cada
+        // ubicación en el orden en que las visita.
+        const VMIN = .35, VMAX = 3, MINPICK = 8, IDLE_MIN = 20, vN = plan.v, tk = plan.tasks;
+        const leg = tk.map(() => ({}));
+        for(let i = 1; i < tk.length; i++){
+          const meters = (plan.act.marks[i].d - plan.act.marks[i - 1].d) * sc;
+          const dtEff = (tk[i].ts - tk[i - 1].ts) - overlapBreaks(tk[i - 1].ts, tk[i].ts);
+          const walkT = dtEff - D.pickSec, Lg = leg[i];
+          Lg.v = vN;
+          if(meters < .05){ if(walkT > IDLE_MIN) Lg.idle = walkT; else Lg.sec = Math.max(MINPICK, dtEff); }
+          else if(walkT <= meters / VMAX){ Lg.v = VMAX; Lg.sec = Math.max(MINPICK, dtEff - meters / VMAX); }
+          else{
+            const expected = meters / vN, excess = walkT - expected;
+            if(excess > Math.max(IDLE_MIN, expected * .5)) Lg.idle = excess;
+            else if(meters / walkT < VMIN){ Lg.v = VMIN; Lg.idle = Math.max(0, walkT - meters / VMIN); }
+            else Lg.v = meters / walkT;
+          }
+        }
+        plan.leg = leg;
+        let mSum = 0, tSum = 0;
+        for(let i = 1; i < tk.length; i++){
+          const meters = (plan.act.marks[i].d - plan.act.marks[i - 1].d) * sc;
+          if(meters >= .05 && leg[i].v){ mSum += meters; tSum += meters / leg[i].v; }
+        }
+        plan.vEff = mSum > 0 && tSum > 0 ? Math.min(2.5, Math.max(.4, mSum / tSum)) : vN;
+        if(a.key !== 'actual') a.v = plan.vEff;
         for(const e of ev){
-          e.v = plan.v;
-          if(e.kind !== 'pick' || e.i === 0) continue;
-          const meters = (plan.act.marks[e.i].d - plan.act.marks[e.i - 1].d) * sc;
-          const dtEff = (plan.tasks[e.i].ts - plan.tasks[e.i - 1].ts) - overlapBreaks(plan.tasks[e.i - 1].ts, plan.tasks[e.i].ts);
-          const walkT = dtEff - D.pickSec;
-          if(meters < .05){ e.sec = Math.max(MINPICK, dtEff); }
-          else if(walkT <= meters / VMAX){ e.v = VMAX; e.sec = Math.max(MINPICK, dtEff - meters / VMAX); }
-          else if(meters / walkT < VMIN){ e.v = VMIN; e.extra = walkT - meters / VMIN; }
-          else e.v = meters / walkT;
+          e.v = a.key === 'actual' ? vN : plan.vEff;
+          if(e.kind !== 'pick') continue;
+          const Lg = leg[e.i] || {};
+          if(a.key === 'actual' && Lg.v) e.v = Lg.v;
+          if(Lg.sec != null) e.sec = Lg.sec;      // picking acortado a lo real (también en el futuro: misma manipulación)
+          if(Lg.idle) e.extra = Lg.idle;
         }
       }
-      let d = 0, dwell = 0, evIdx = 0, l = 0;
-      a.dist = []; a.st = []; a.poses = []; a.arriveL = []; a.confL = []; a.kltL = null;
+      let d = 0, dwell = 0, idle = 0, evIdx = 0, l = 0;
+      a.dist = []; a.st = []; a.poses = []; a.arriveL = []; a.confL = []; a.idleEv = []; a.kltL = null;
       while(l < 40000){
-        if(dwell > 0){ dwell -= DT; a.st.push(1); }
+        if(idle > 0){ idle -= DT; a.st.push(5); }          // 5 = parado (demora respecto de caminar y picking normales)
+        else if(dwell > 0){ dwell -= DT; a.st.push(1); }
         else{
           const spd = (evIdx < ev.length && ev[evIdx].v) || a.v;
           let d1 = Math.min(a.total, d + spd * DT), trig = null;
           if(evIdx < ev.length && d1 >= ev[evIdx].m - 1e-9){ d1 = ev[evIdx].m; trig = ev[evIdx]; }
           d = d1;
-          if(trig){ dwell = trig.sec + (trig.extra || 0); evIdx++; if(trig.kind === 'pick'){ a.arriveL[trig.i] = l; a.confL[trig.i] = l + Math.ceil(dwell / DT); } else a.kltL = l; }
+          if(trig){ dwell = trig.sec; idle = trig.extra || 0; evIdx++; if(trig.kind === 'pick'){ a.arriveL[trig.i] = l; a.confL[trig.i] = l + Math.ceil((dwell + idle) / DT); if(idle > 0) a.idleEv.push({i: trig.i, l, sec: idle}); } else a.kltL = l; }
           a.st.push(0);
         }
         a.dist.push(d); a.poses.push(pose(a, d, 1)); l++;
-        if(d >= a.total - 1e-9 && dwell <= 0) break;
+        if(d >= a.total - 1e-9 && dwell <= 0 && idle <= 0) break;
       }
       a.L = l;
       return a;
@@ -6932,7 +6956,7 @@ body.in-sharepoint .inicio-grid{min-height:calc(var(--sp-app-height,78dvh) - 152
         else{ st[k] = a.st[l]; dist[k] = a.dist[l]; lastS = st[k]; lastD = dist[k]; }
       }
       const clockAt = l => clockOfW[first + l];
-      byTrk.set(a.trk.id, {dist, st, side, arrive: a.arriveL.map(l => l == null ? null : clockAt(l)), confirm: a.confL.map(l => l == null ? null : clockAt(l)), kltArrive: a.kltL != null ? clockAt(a.kltL) : null,
+      byTrk.set(a.trk.id, {dist, st, side, arrive: a.arriveL.map(l => l == null ? null : clockAt(l)), confirm: a.confL.map(l => l == null ? null : clockAt(l)), idle: a.idleEv.map(e => ({i: e.i, sec: e.sec, t: clockAt(e.l)})), kltArrive: a.kltL != null ? clockAt(a.kltL) : null,
         wait: a.delay * DT, doneT: clockAt(a.L - 1), start: clockOfW[first] ?? a.start, realStart: a.start, v: a.v, at: a.at, pathTotal: a.total});
     }
     return {T0, T1: T0 + nClock * DT, steps: nClock, ag: byTrk, waits, overlaps, forced: 0, dodges: 0, overlapSamples: [], breaks};
@@ -7129,7 +7153,7 @@ body.in-sharepoint .inicio-grid{min-height:calc(var(--sp-app-height,78dvh) - 152
           S.head[trk.id] = cur + dl * .35;
           const moving = ts.st === 0;
           let rig = rigFaces({x: pz.x, z: pz.z}, S.head[trk.id], col, dm / 1.4 * Math.PI * 2, moving);
-          const lab = project(pz.x, 2.6, pz.z), state = {1: ' · picking', 2: ' · espera', 3: ' · descanso', 4: ''}[ts.st] || '';
+          const lab = project(pz.x, 2.6, pz.z), state = {1: ' · picking', 2: ' · espera', 3: ' · descanso', 4: '', 5: ' · parado'}[ts.st] || '';
           if(lab) rig += `<text x="${lab.x.toFixed(1)}" y="${lab.y.toFixed(1)}" font-size="12" font-weight="700" fill="${col}" stroke="#04101f" stroke-width="3" paint-order="stroke" text-anchor="middle">${esc3(d.order.picker)} · ${esc3(d.order.id)}${state}</text>`;
           rigs.push({w: pp.w, html: rig});
         }
@@ -8052,7 +8076,7 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
        glifos Unicode del sistema.
      - Ya cumplido por la app (v41): guarda de window.define en <head>, restauración al final, sin <script src>,
        un solo HTML, guarda de doble inicio (window.__slotting3dInitialized), sin alert/confirm/prompt nativos. */
-  const BUILD = {version: 'v66', date: '2026-11-05', file: 'Slotting-3D.html'};
+  const BUILD = {version: 'v67', date: '2026-11-05', file: 'Slotting-3D.html'};
   window.__SLOTTING_BUILD = BUILD;
 
   function marker(){
@@ -8806,6 +8830,13 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
   @media (max-width: 700px){ .par-col .rec-stage{height:360px !important} .par-clock{font-size:18px} }
   .par-ag text{font-size:1.5px;fill:#fff;paint-order:stroke;stroke:#000;stroke-width:.4px;text-anchor:middle;pointer-events:none}
   .par-msg{padding:18px 4px;font-size:13px}
+  .par-ag.par-stop circle{fill:#ff3b3b;stroke:#fff;stroke-width:.5px}
+  .par-ag.par-stop text{fill:#ffd2d2}
+  .par-idle{margin-top:12px}
+  .par-idle h3{font-size:13px;margin:0 0 6px}
+  .par-idle table{width:100%;border-collapse:collapse;font-size:12px}
+  .par-idle th,.par-idle td{padding:4px 8px;text-align:left;border-bottom:1px solid rgba(120,180,220,.18)}
+  .par-idle td.n{text-align:right;font-variant-numeric:tabular-nums}
   .par-note{font-size:11px;margin:8px 0 0}
 </style>
 <script id="v65-simulacion-paralela">
@@ -8828,7 +8859,7 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
   const hms = s => { s = ((Math.floor(s) % 86400) + 86400) % 86400; return `${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`; };
   const dayLbl = d => { const dt = new Date(Date.UTC(1899, 11, 30) + Number(d) * 86400000); return `${dt.toISOString().slice(0, 10)} ${dt.toLocaleDateString('es-AR', {weekday: 'short', timeZone: 'UTC'})}`; };
 
-  const P = {sim: null, tracks: [], marks: new Map(), t: 0, tA: 0, tB: 1, playing: false, raf: 0, last: 0, speed: 60, key: '', f: {date: null, h0: 6, h1: 23, n: 8},
+  const P = {idleTot: {A: 0, B: 0}, sim: null, tracks: [], marks: new Map(), t: 0, tA: 0, tB: 1, playing: false, raf: 0, last: 0, speed: 60, key: '', f: {date: null, h0: 6, h1: 23, n: 8},
     els: new Map(), doneCount: new Map(), tot: {A: 0, B: 0}, busy: false, timer: 0, keyB: 'future'};
   const $ = id => document.getElementById(id);
 
@@ -8932,6 +8963,29 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
           P.tot[t.side] += sim.ag.get(t.id)?.pathTotal || 0;
         }
         drawPanels(L);
+        // demoras: ubicaciones donde el picker quedó parado (lado actual) y su total en los dos lados
+        const idles = [];
+        P.idleTot = {A: 0, B: 0};
+        for(const t of tracks){
+          const r = sim.ag.get(t.id);
+          for(const ev of r?.idle || []){
+            P.idleTot[t.side] += ev.sec;
+            if(t.side !== 'A' || ev.sec < 20) continue;
+            const m = (P.marks.get(t.id) || [])[ev.i];
+            document.getElementById(`pm${t.id}_${ev.i}`)?.setAttribute('stroke', '#ff3b3b');
+            document.getElementById(`pm${t.id}_${ev.i}`)?.setAttribute('stroke-width', '.7');
+            idles.push({t: ev.t, picker: t.picker, order: t.order, bin: m?.bin || '', sec: ev.sec});
+          }
+        }
+        idles.sort((x, y) => y.sec - x.sec);
+        const listEl = document.getElementById('parIdle');
+        if(listEl){
+          const top = idles.slice(0, 12).sort((x, y) => x.t - y.t);
+          listEl.innerHTML = idles.length
+            ? `<h3>Demoras en el layout actual (picker parado ≥ 20 s respecto de caminar y picking normales) · ${nf(idles.length)} · ${(P.idleTot.A / 60).toLocaleString('es-AR', {maximumFractionDigits: 1})} min en total</h3>
+               <table><thead><tr><th>Hora</th><th>Picker</th><th>Orden</th><th>Ubicación</th><th class="n">Parado</th></tr></thead><tbody>${top.map(x => `<tr><td>${hms(x.t)}</td><td>${esc(x.picker)}</td><td>${esc(x.order)}</td><td>${esc(x.bin)}</td><td class="n">${Math.floor(x.sec / 60)} min ${pad(Math.round(x.sec % 60))} s</td></tr>`).join('')}</tbody></table>`
+            : '<h3>Sin demoras detectadas en estas órdenes.</h3>';
+        }
         P.tA = Math.floor((sim.T0 - 60) / 60) * 60; P.tB = sim.T1;   // el reloj arranca en la primera salida real (puede ser antes de la hora de la 1.ª confirmación)
         P.t = P.tA;
         $('parInfo').textContent = `${list.length} de ${total} órdenes del día · ${new Set(list.map(o => o.picker)).size} pickers`;
@@ -8959,7 +9013,7 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
       <div class="par-col">
         <div class="par-title"><i style="background:${COL[k]}"></i><b>Layout ${side === 'A' ? 'ACTUAL' : (kb === 'future' ? 'FUTURO' : 'ACTUAL por secuencia')}</b><span class="par-m" id="parM${side}"></span></div>
         <div class="rec-stage"><svg id="parSvg${side}" xmlns="http://www.w3.org/2000/svg"></svg></div>
-      </div>`).join('')}</div>`;
+      </div>`).join('')}</div><div class="par-idle" id="parIdle"></div>`;
     // límites del plano: bins de picking (CVPZ) del layout
     const type = new Map(State.bins.map(b => [b.bin, b.storageType]));
     const pos = [];
@@ -8989,7 +9043,10 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
         ags += `<g class="par-ag" id="pa${t.id}" style="display:none"><circle r="1.35" fill="${t.color}" stroke="#fff" stroke-width=".28"/><text y="-1.9">${esc(String(t.picker).slice(0, 9))}</text></g>`;
       }
       svg.innerHTML = `<rect x="${vx.toFixed(2)}" y="${vz.toFixed(2)}" width="${w.toFixed(2)}" height="${h.toFixed(2)}" fill="#04101d"/>${racks}${labels}${marks}${ags}`;
-      for(const t of P.tracks.filter(x => x.side === side)) P.els.set(t.id, {g: svg.querySelector('#pa' + t.id), n: (P.marks.get(t.id) || []).length, svg});
+      for(const t of P.tracks.filter(x => x.side === side)){
+        const g = svg.querySelector('#pa' + t.id);
+        P.els.set(t.id, {g, lbl: g.querySelector('text'), name: String(t.picker).slice(0, 9), stop: false, n: (P.marks.get(t.id) || []).length, svg});
+      }
       UI()?.attachZoom?.(svg, {group: 'par2', noFollow: true});
     }
   }
@@ -9011,6 +9068,7 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
       e.g.style.display = '';
       e.g.setAttribute('transform', `translate(${pos.x.toFixed(2)} ${pos.z.toFixed(2)})`);
       e.g.style.opacity = st === 4 ? .35 : st === 3 ? .6 : 1;
+      if(e.stop !== (st === 5)){ e.stop = st === 5; e.g.classList.toggle('par-stop', e.stop); if(e.lbl) e.lbl.textContent = e.stop ? `${e.name} · parado` : e.name; }
       live[t.side] += dm;
       if(st === 4) done[t.side]++;
       let c = 0;
@@ -9022,7 +9080,7 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
     }
     for(const side of ['A', 'B']){
       const el = $('parM' + side);
-      if(el) el.textContent = `${done[side]}/${nT[side]} órdenes terminadas · ${nf(live[side])} / ${nf(P.tot[side])} m`;
+      if(el) el.textContent = `${done[side]}/${nT[side]} órdenes terminadas · ${nf(live[side])} / ${nf(P.tot[side])} m · parado ${nf((P.idleTot?.[side] || 0) / 60, 1)} min`;
     }
     const clock = $('parClock'); if(clock) clock.textContent = hms(P.t);
     const sl = $('parSlider'); if(sl) sl.value = String(Math.round((P.t - P.tA) / Math.max(1, P.tB - P.tA) * 1000));
