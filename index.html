@@ -8,7 +8,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#071225">
 <meta name="slotting-baseline" content="FAVORITA-v14-v18-v19-v20-v21-v22-v23-progress-safe-render">
-<title>Sistema de Slotting 3D Inteligente · v64 · Demo con Picking precargado</title>
+<title>Sistema de Slotting 3D Inteligente · v66 · Simulación con tiempo real del proceso</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300,0,0" rel="stylesheet">
@@ -1224,15 +1224,35 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
 <style id="v63-picking-enfocado-css">
   /* Pestaña Picking: empieza con los filtros y el plano 2D con su simulación; luego la única tabla que importa
      (metros por Warehouse Order: actual / por secuencia / futuro); el resto queda debajo. */
-  #view-picking .pk-shell > *{order:5}
+  #view-picking .pk-shell > *{order:6}
   #view-picking .pk-shell > .pk-head{order:0}
   #view-picking .pk-shell > .pk-empty{order:1}
-  #view-picking .pk-shell > #pkRecorrido{order:2}
-  #view-picking .pk-shell > #pkFuture{order:3}
-  #view-picking .pk-shell > #pkCollapseBar{order:4}
+  #view-picking .pk-shell > #pkParalela{order:2}
+  #view-picking .pk-shell > #pkRecorrido{order:3}
+  #view-picking .pk-shell > #pkFuture{order:4}
+  #view-picking .pk-shell > #pkCollapseBar{order:5}
   #view-picking .pk-shell > .pk-tabla-oculta{display:none !important}
 </style>
 
+
+<style id="v65-simulacion-paralela-css">
+  .par-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin:8px 0}
+  .par-tools label{display:grid;gap:3px;font-size:11px}
+  .par-tools .input{min-width:84px}
+  .par-tools input[type=range]{width:min(360px,70vw)}
+  .par-clock{font:700 24px/1 Orbitron,Rajdhani,monospace;letter-spacing:.04em;padding:0 6px;color:#dff1ff}
+  .par-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  @media (max-width: 980px){ .par-grid{grid-template-columns:1fr} }
+  .par-col{min-width:0}
+  .par-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 6px;font-size:13px}
+  .par-title i{display:inline-block;width:12px;height:12px;border-radius:3px}
+  .par-title .par-m{margin-left:auto;font-variant-numeric:tabular-nums;font-size:12px;opacity:.9}
+  .par-col .rec-stage{height:560px !important}
+  @media (max-width: 700px){ .par-col .rec-stage{height:360px !important} .par-clock{font-size:18px} }
+  .par-ag text{font-size:1.5px;fill:#fff;paint-order:stroke;stroke:#000;stroke-width:.4px;text-anchor:middle;pointer-events:none}
+  .par-msg{padding:18px 4px;font-size:13px}
+  .par-note{font-size:11px;margin:8px 0 0}
+</style>
 
 <textarea id="slotting-sp-code" style="display:none" aria-hidden="true" tabindex="-1">
 /* Slotting 3D · compilación para SharePoint (todos los bloques en un solo ámbito) */
@@ -6944,22 +6964,69 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
     const sc = scaleF(), D = AMd.disp, breaks = parseBreaks();
     const tracks = S.tracks.filter(t =&gt; pathOf(t) &amp;&amp; byId(t.order));
     if(!tracks.length) return null;
+    /* Tiempo real del proceso (v66). La hora de SALIDA de cada orden no es la de la primera línea: se calcula hacia atrás
+       desde la primera confirmación real, restándole todo lo que el picker hace antes de confirmarla:
+         salida = 1.ª confirmación − picking (pickSec) − dejar los KLT en la mesa (kltSec) − metros hasta la 1.ª ubicación / v
+       (v = velocidad de marcha de esa orden entre confirmaciones). Los DOS escenarios de una misma orden salen en esa misma hora.
+       En el escenario ACTUAL cada tramo se recorre a la velocidad que haga que la confirmación caiga a su hora real
+       (si sobra tiempo, el picker espera en la ubicación; los descansos se descuentan); el futuro y "por secuencia" caminan a
+       la velocidad media de la orden. Con D.realTime === false se vuelve al modelo anterior. */
+    const realOn = D.realTime !== false;
+    const overlapBreaks = (t0, t1) =&gt; {
+      if(!breaks.length || !(t1 &gt; t0)) return 0;
+      const s0 = ((t0 % 86400) + 86400) % 86400, len = t1 - t0;
+      let sum = 0;
+      for(const [b0, b1] of breaks){ const lo = Math.max(s0, b0), hi = Math.min(s0 + len, b1); if(hi &gt; lo) sum += hi - lo; }
+      return sum;
+    };
+    function realPlan(trk, d, o){
+      const act = d?.out?.actual, tasks = o?.tasks || [];
+      if(!act || !tasks.length || act.marks.length !== tasks.length) return null;
+      const N = tasks.length;
+      let v = NaN;
+      if(N &gt;= 2){
+        const meters = (act.marks[N - 1].d - act.marks[0].d) * sc, secs = (tasks[N - 1].ts - tasks[0].ts) - overlapBreaks(tasks[0].ts, tasks[N - 1].ts) - (N - 1) * D.pickSec;
+        if(secs &gt; 1 &amp;&amp; meters &gt; 0) v = meters / secs;
+      }
+      if(!(v &gt;= .4 &amp;&amp; v &lt;= 2.5)) v = trkV(trk);
+      const M0 = act.marks[0].d * sc;
+      return {v, act, tasks, depart: tasks[0].ts - D.pickSec - (act.klt ? D.kltSec : 0) - M0 / v};
+    }
     // 1) ciclo aislado de cada picker (en pasos de tiempo trabajado)
     const ag = tracks.map(trk =&gt; {
-      const path = pathOf(trk), o = dataFor(trk).order, ev = [];
+      const path = pathOf(trk), dd = dataFor(trk), o = dd.order, ev = [];
       if(path.klt &amp;&amp; path.kltD &gt; 0) ev.push({m: path.kltD, sec: D.kltSec, kind: 'klt'});
       path.marks.forEach((m, i) =&gt; ev.push({m: m.d * sc, sec: D.pickSec, kind: 'pick', i}));
       ev.sort((a, b) =&gt; a.m - b.m);
-      const a = {trk, key: scnKey(trk), path, at: sampler(path), v: trkV(trk), start: o.startTs, total: path.total, dir: {x: 1, z: 0}, delay: 0};
+      const plan = realOn ? realPlan(trk, dd, o) : null;
+      const a = {trk, key: scnKey(trk), path, at: sampler(path), v: plan ? plan.v : trkV(trk), start: plan ? plan.depart : o.startTs, total: path.total, dir: {x: 1, z: 0}, delay: 0, real: !!plan};
+      if(plan &amp;&amp; a.key === 'actual'){
+        // Cada tramo se ajusta al intervalo REAL entre confirmaciones: caminata + picking = intervalo. Si el intervalo es más
+        // corto que "pickSec + caminata a 3 m/s", el picking se acorta (mínimo 8 s) en vez de arrastrar atraso; si sobra
+        // mucho tiempo (&gt; caminata a 0,35 m/s), espera en la ubicación.
+        const VMIN = .35, VMAX = 3, MINPICK = 8;
+        for(const e of ev){
+          e.v = plan.v;
+          if(e.kind !== 'pick' || e.i === 0) continue;
+          const meters = (plan.act.marks[e.i].d - plan.act.marks[e.i - 1].d) * sc;
+          const dtEff = (plan.tasks[e.i].ts - plan.tasks[e.i - 1].ts) - overlapBreaks(plan.tasks[e.i - 1].ts, plan.tasks[e.i].ts);
+          const walkT = dtEff - D.pickSec;
+          if(meters &lt; .05){ e.sec = Math.max(MINPICK, dtEff); }
+          else if(walkT &lt;= meters / VMAX){ e.v = VMAX; e.sec = Math.max(MINPICK, dtEff - meters / VMAX); }
+          else if(meters / walkT &lt; VMIN){ e.v = VMIN; e.extra = walkT - meters / VMIN; }
+          else e.v = meters / walkT;
+        }
+      }
       let d = 0, dwell = 0, evIdx = 0, l = 0;
-      a.dist = []; a.st = []; a.poses = []; a.arriveL = []; a.kltL = null;
+      a.dist = []; a.st = []; a.poses = []; a.arriveL = []; a.confL = []; a.kltL = null;
       while(l &lt; 40000){
         if(dwell &gt; 0){ dwell -= DT; a.st.push(1); }
         else{
-          let d1 = Math.min(a.total, d + a.v * DT), trig = null;
+          const spd = (evIdx &lt; ev.length &amp;&amp; ev[evIdx].v) || a.v;
+          let d1 = Math.min(a.total, d + spd * DT), trig = null;
           if(evIdx &lt; ev.length &amp;&amp; d1 &gt;= ev[evIdx].m - 1e-9){ d1 = ev[evIdx].m; trig = ev[evIdx]; }
           d = d1;
-          if(trig){ dwell = trig.sec; evIdx++; if(trig.kind === 'pick') a.arriveL[trig.i] = l; else a.kltL = l; }
+          if(trig){ dwell = trig.sec + (trig.extra || 0); evIdx++; if(trig.kind === 'pick'){ a.arriveL[trig.i] = l; a.confL[trig.i] = l + Math.ceil(dwell / DT); } else a.kltL = l; }
           a.st.push(0);
         }
         a.dist.push(d); a.poses.push(pose(a, d, 1)); l++;
@@ -7020,7 +7087,7 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
         else{ st[k] = a.st[l]; dist[k] = a.dist[l]; lastS = st[k]; lastD = dist[k]; }
       }
       const clockAt = l =&gt; clockOfW[first + l];
-      byTrk.set(a.trk.id, {dist, st, side, arrive: a.arriveL.map(l =&gt; l == null ? null : clockAt(l)), kltArrive: a.kltL != null ? clockAt(a.kltL) : null,
+      byTrk.set(a.trk.id, {dist, st, side, arrive: a.arriveL.map(l =&gt; l == null ? null : clockAt(l)), confirm: a.confL.map(l =&gt; l == null ? null : clockAt(l)), kltArrive: a.kltL != null ? clockAt(a.kltL) : null,
         wait: a.delay * DT, doneT: clockAt(a.L - 1), start: clockOfW[first] ?? a.start, realStart: a.start, v: a.v, at: a.at, pathTotal: a.total});
     }
     return {T0, T1: T0 + nClock * DT, steps: nClock, ag: byTrk, waits, overlaps, forced: 0, dodges: 0, overlapSamples: [], breaks};
@@ -7493,7 +7560,7 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
     return r;
   };
 
-  window.__Sim3D = {open, close, draw, frame, addTrack, state: S, runSim, ensureSim, stop, afterTracksChanged, renderPanel, onData(){ /* la caché se invalida sola por clave */ }};
+  window.__Sim3D = {open, close, draw, frame, addTrack, state: S, runSim, ensureSim, stop, afterTracksChanged, renderPanel, allOrders, DT, onData(){ /* la caché se invalida sola por clave */ }};
   function bindV49(){ try{ ensureDom(); }catch(e){} }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () =&gt; setTimeout(bindV49, 1200), {once: true});
   else setTimeout(bindV49, 1200);
@@ -8123,7 +8190,7 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
        glifos Unicode del sistema.
      - Ya cumplido por la app (v41): guarda de window.define en &lt;head&gt;, restauración al final, sin &lt;script src&gt;,
        un solo HTML, guarda de doble inicio (window.__slotting3dInitialized), sin alert/confirm/prompt nativos. */
-  const BUILD = {version: 'v64', date: '2026-11-05', file: 'Slotting-3D.html'};
+  const BUILD = {version: 'v66', date: '2026-11-05', file: 'Slotting-3D.html'};
   window.__SLOTTING_BUILD = BUILD;
 
   function marker(){
@@ -8366,7 +8433,7 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
     bar.className = 'rec-zoom';
     bar.innerHTML = '&lt;button type="button" data-z="in" title="Acercar"&gt;＋&lt;/button&gt;&lt;button type="button" data-z="out" title="Alejar"&gt;－&lt;/button&gt;'
       + '&lt;button type="button" data-z="reset" title="Ver todo el recorrido"&gt;⟲&lt;/button&gt;'
-      + '&lt;button type="button" data-z="follow" title="El plano acompaña al picker durante la animación"&gt;🎯 Seguir&lt;/button&gt;'
+      + (opts.noFollow ? '' : '&lt;button type="button" data-z="follow" title="El plano acompaña al picker durante la animación"&gt;🎯 Seguir&lt;/button&gt;')
       + (st.group ? '&lt;button type="button" data-z="sync" title="Mover y acercar los dos planos a la vez"&gt;🔗 Sincronizar&lt;/button&gt;' : '')
       + '&lt;button type="button" data-z="big" title="Plano a pantalla grande"&gt;⛶&lt;/button&gt;';
     stage.style.position = 'relative';
@@ -8377,7 +8444,7 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
     stage.appendChild(hint);
     const followBtn = bar.querySelector('[data-z="follow"]'), syncBtn = bar.querySelector('[data-z="sync"]');
     if(syncBtn) syncBtn.classList.toggle('on', syncOn);
-    const setFollow = on =&gt; { st.follow = on; followBtn.classList.toggle('on', on); };
+    const setFollow = on =&gt; { st.follow = on; followBtn?.classList.toggle('on', on); };
 
     bar.addEventListener('click', e =&gt; {
       const b = e.target.closest('button[data-z]');
@@ -8440,7 +8507,7 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
       if(sec.dataset.pkInit) continue;
       sec.dataset.pkInit = '1';
       const k = keyOf(sec);
-      const open = k in saved ? !saved[k] : (sec.id === 'pkRecorrido' || sec.id === 'pkFuture');   // saved[k] = true -&gt; colapsada
+      const open = k in saved ? !saved[k] : (sec.id === 'pkRecorrido' || sec.id === 'pkFuture' || sec.id === 'pkParalela');   // saved[k] = true -&gt; colapsada
       sec.classList.toggle('pk-collapsed', !open);
     }
   }
@@ -8812,6 +8879,277 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
   }
   window.__DemoPicking = {load: loadDemoPicking, restore: restoreReal, taskRows: demoTaskRows, futureRows: demoFutureRows};
   setTimeout(hint, 2600);
+})();
+;
+
+/* ===== v65-simulacion-paralela ===== */
+(() =&gt; {
+  'use strict';
+  /* v65 - Simulación en paralelo: layout ACTUAL a la izquierda y layout FUTURO a la derecha (en celular, uno abajo
+     del otro), cada uno en su propio plano y con su propio set de pickers, SIN mezclarlos en el mismo mapa.
+     Usa el motor del Simulador 3D (reloj laboral con descansos, ciclo despacho→KLT→picking→regreso, evitación de
+     choques) con las MISMAS Warehouse Orders y pickers en los dos lados: cada orden arranca a su hora real de
+     inicio (el reloj empieza a la hora "Desde", por defecto las 6:00) y corre a la vez en actual y en futuro.
+     El motor solo hace interactuar pistas del mismo escenario, así que los dos lados son independientes.
+     Esta tarjeta no toca el estado del Simulador 3D: cambia S.tracks por un instante para llamar a runSim(). */
+  if(typeof switchView !== 'function') return;
+  const SIM = () =&gt; window.__Sim3D, RC = () =&gt; window.__Recorrido, PKm = () =&gt; window.__Picking, FUTm = () =&gt; window.__Futuro, AMd = () =&gt; window.__Layout44;
+  const PALETTE = ['#ff9f43', '#3ddc97', '#5aa9ff', '#f368e0', '#feca57', '#48dbfb', '#ff6b6b', '#a29bfe', '#1dd1a1', '#ee5253', '#c8d6e5', '#ff9ff3'];
+  const GROUP_FILL = {BLKA: '#2b5b8f', BLKB: '#2d7a68', BLKC: '#7a5a2d'};
+  const esc = s =&gt; String(s ?? '').replace(/[&amp;&lt;&gt;"]/g, c =&gt; ({'&amp;': '&amp;amp;', '&lt;': '&amp;lt;', '&gt;': '&amp;gt;', '"': '&amp;quot;'}[c]));
+  const nf = (v, d = 0) =&gt; Number.isFinite(v) ? v.toLocaleString('es-AR', {maximumFractionDigits: d, minimumFractionDigits: d}) : '—';
+  const pad = n =&gt; String(n).padStart(2, '0');
+  const hms = s =&gt; { s = ((Math.floor(s) % 86400) + 86400) % 86400; return `${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`; };
+  const dayLbl = d =&gt; { const dt = new Date(Date.UTC(1899, 11, 30) + Number(d) * 86400000); return `${dt.toISOString().slice(0, 10)} ${dt.toLocaleDateString('es-AR', {weekday: 'short', timeZone: 'UTC'})}`; };
+
+  const P = {sim: null, tracks: [], marks: new Map(), t: 0, tA: 0, tB: 1, playing: false, raf: 0, last: 0, speed: 60, key: '', f: {date: null, h0: 6, h1: 23, n: 8},
+    els: new Map(), doneCount: new Map(), tot: {A: 0, B: 0}, busy: false, timer: 0, keyB: 'future'};
+  const $ = id =&gt; document.getElementById(id);
+
+  /* ---------- Tarjeta ---------- */
+  function ensureCard(){
+    if($('pkParalela')) return true;
+    const rec = $('pkRecorrido');
+    if(!rec) return false;
+    const sec = document.createElement('section');
+    sec.className = 'card card-pad pk-data';
+    sec.id = 'pkParalela';
+    sec.innerHTML = `
+      &lt;div class="table-card-head"&gt;&lt;h2&gt;Simulación en paralelo · layout actual vs futuro&lt;/h2&gt;&lt;span class="muted" id="parInfo"&gt;&lt;/span&gt;&lt;/div&gt;
+      &lt;div class="par-tools"&gt;
+        &lt;label&gt;Fecha&lt;select class="input compact-select" id="parDate"&gt;&lt;/select&gt;&lt;/label&gt;
+        &lt;label&gt;Desde (h)&lt;select class="input compact-select" id="parH0"&gt;${[...Array(24).keys()].map(h =&gt; `&lt;option value="${h}" ${h === 6 ? 'selected' : ''}&gt;${pad(h)}:00&lt;/option&gt;`).join('')}&lt;/select&gt;&lt;/label&gt;
+        &lt;label&gt;Hasta (h)&lt;select class="input compact-select" id="parH1"&gt;${[...Array(24).keys()].map(h =&gt; `&lt;option value="${h}" ${h === 23 ? 'selected' : ''}&gt;${pad(h)}:59&lt;/option&gt;`).join('')}&lt;/select&gt;&lt;/label&gt;
+        &lt;label&gt;Pickers a la vez&lt;select class="input compact-select" id="parN"&gt;${[2, 4, 6, 8, 12, 16, 24].map(v =&gt; `&lt;option value="${v}" ${v === 8 ? 'selected' : ''}&gt;${v}&lt;/option&gt;`).join('')}&lt;/select&gt;&lt;/label&gt;
+        &lt;label&gt;Velocidad&lt;select class="input compact-select" id="parSpeed"&gt;${[[15, '15x'], [30, '30x'], [60, '60x (1 min/s)'], [120, '120x'], [300, '300x'], [600, '600x']].map(([v, l]) =&gt; `&lt;option value="${v}" ${v === 60 ? 'selected' : ''}&gt;${l}&lt;/option&gt;`).join('')}&lt;/select&gt;&lt;/label&gt;
+        &lt;button class="btn primary" id="parPlay" type="button"&gt;▶ Reproducir&lt;/button&gt;
+        &lt;button class="btn" id="parReset" type="button"&gt;↺ Desde el inicio&lt;/button&gt;
+        &lt;b class="par-clock" id="parClock"&gt;--:--:--&lt;/b&gt;
+      &lt;/div&gt;
+      &lt;div class="par-tools"&gt;&lt;label style="flex:1 1 280px"&gt;Reloj&lt;input type="range" id="parSlider" min="0" max="1000" value="0"&gt;&lt;/label&gt;&lt;/div&gt;
+      &lt;div id="parBody"&gt;&lt;p class="muted par-msg"&gt;Calculando…&lt;/p&gt;&lt;/div&gt;
+      &lt;p class="muted par-note" id="parNote"&gt;&lt;/p&gt;`;
+    rec.after(sec);
+    sec.querySelector('#parDate').addEventListener('change', e =&gt; { P.f.date = Number(e.target.value); rebuildSoon(true); });
+    sec.querySelector('#parH0').addEventListener('change', e =&gt; { P.f.h0 = Number(e.target.value); rebuildSoon(true); });
+    sec.querySelector('#parH1').addEventListener('change', e =&gt; { P.f.h1 = Number(e.target.value); rebuildSoon(true); });
+    sec.querySelector('#parN').addEventListener('change', e =&gt; { P.f.n = Number(e.target.value); rebuildSoon(true); });
+    sec.querySelector('#parSpeed').addEventListener('change', e =&gt; { P.speed = Number(e.target.value) || 60; });
+    sec.querySelector('#parPlay').addEventListener('click', () =&gt; P.playing ? stop() : play());
+    sec.querySelector('#parReset').addEventListener('click', () =&gt; { stop(); P.t = P.tA; frame(); });
+    sec.querySelector('#parSlider').addEventListener('input', e =&gt; { stop(); P.t = P.tA + Number(e.target.value) / 1000 * (P.tB - P.tA); frame(); });
+    return true;
+  }
+
+  /* ---------- Datos ---------- */
+  const orders = () =&gt; SIM()?.allOrders?.() || [];
+  function refreshDates(){
+    const sel = $('parDate');
+    if(!sel) return;
+    const dates = [...new Set(orders().map(o =&gt; o.date))].sort((a, b) =&gt; a - b);
+    if(!dates.length) return;
+    if(P.f.date == null || !dates.includes(P.f.date)) P.f.date = dates[dates.length - 1];
+    sel.innerHTML = dates.map(d =&gt; `&lt;option value="${d}" ${d === P.f.date ? 'selected' : ''}&gt;${esc(dayLbl(d))}&lt;/option&gt;`).join('');
+  }
+  function pickOrders(){
+    const {date, h0, h1, n} = P.f, a = h0 * 3600, b = (h1 + 1) * 3600;
+    const c = orders().filter(o =&gt; o.date === date &amp;&amp; (h0 &lt;= h1 ? (o.startSec &gt;= a &amp;&amp; o.startSec &lt; b) : (o.startSec &gt;= a || o.startSec &lt; b)));
+    c.sort((x, y) =&gt; x.startTs - y.startTs);
+    const out = [], used = new Set();
+    for(const o of c){ if(out.length &gt;= n) break; if(!used.has(o.picker)){ out.push(o); used.add(o.picker); } }   // primero un pedido por picker
+    for(const o of c){ if(out.length &gt;= n) break; if(!out.includes(o)) out.push(o); }
+    return {list: out.sort((x, y) =&gt; x.startTs - y.startTs), total: c.length};
+  }
+  const keyNow = () =&gt; `${PKm()?.tasks?.length}|${FUTm()?.version}|${FUTm()?.loaded}|${JSON.stringify(window.__Geo)}|${JSON.stringify(AMd()?.disp)}|${P.f.date}|${P.f.h0}|${P.f.h1}|${P.f.n}`;
+
+  /* ---------- Cálculo (motor del Simulador 3D) ---------- */
+  function build(force){
+    if(P.busy) return;
+    const body = $('parBody');
+    if(!body) return;
+    const PK = PKm(), S = SIM()?.state;
+    if(!PK?.loaded || !S || !orders().length){
+      body.innerHTML = '&lt;p class="muted par-msg"&gt;Importe Warehouse Task (o active el Modo Demo) para simular los dos layouts en paralelo.&lt;/p&gt;';
+      P.sim = null; return;
+    }
+    refreshDates();
+    const key = keyNow();
+    if(!force &amp;&amp; key === P.key &amp;&amp; P.sim) return;
+    P.busy = true;
+    body.innerHTML = '&lt;p class="muted par-msg"&gt;Calculando los dos escenarios con el mismo reloj… (puede tardar unos segundos)&lt;/p&gt;';
+    setTimeout(() =&gt; {
+      try{
+        const {list, total} = pickOrders();
+        if(!list.length){ body.innerHTML = '&lt;p class="muted par-msg"&gt;No hay Warehouse Orders en esa fecha y rango de horas.&lt;/p&gt;'; P.sim = null; return; }
+        const fut = !!FUTm()?.loaded;
+        P.keyB = fut ? 'future' : 'seq';
+        const carts = Math.max(1, AMd()?.disp?.carts || 7);
+        const tracks = [];
+        list.forEach((o, i) =&gt; {
+          const slot = i % carts, color = PALETTE[i % PALETTE.length];
+          tracks.push({id: 7000 + i * 2, order: o.id, scenario: 'actual', slot, color, picker: o.picker, side: 'A', o});
+          tracks.push({id: 7001 + i * 2, order: o.id, scenario: P.keyB, slot, color, picker: o.picker, side: 'B', o});
+        });
+        const saved = S.tracks;
+        let sim = null;
+        S.tracks = tracks;
+        try{ sim = SIM().runSim(); }finally{ S.tracks = saved; }
+        if(!sim){ body.innerHTML = '&lt;p class="muted par-msg"&gt;No se pudo calcular el recorrido de esas órdenes.&lt;/p&gt;'; P.sim = null; return; }
+        P.sim = sim; P.tracks = tracks; P.key = key; P.marks.clear();
+        let L = null;
+        P.tot = {A: 0, B: 0};
+        for(const t of tracks){
+          const d = RC().scenariosFor(t.o.tasks, t.slot);
+          L = L || d.L;
+          const k = t.scenario === 'future' &amp;&amp; !d.out.future ? 'seq' : t.scenario;
+          P.marks.set(t.id, d.out[k]?.marks || []);
+          P.tot[t.side] += sim.ag.get(t.id)?.pathTotal || 0;
+        }
+        drawPanels(L);
+        P.tA = Math.floor((sim.T0 - 60) / 60) * 60; P.tB = sim.T1;   // el reloj arranca en la primera salida real (puede ser antes de la hora de la 1.ª confirmación)
+        P.t = P.tA;
+        $('parInfo').textContent = `${list.length} de ${total} órdenes del día · ${new Set(list.map(o =&gt; o.picker)).size} pickers`;
+        const delta = P.tot.A &gt; 0 ? (P.tot.B - P.tot.A) / P.tot.A * 100 : NaN;
+        const cyc = {A: 0, B: 0};
+        for(const t of tracks){ const r = sim.ag.get(t.id); if(r) cyc[t.side] += Math.max(0, r.doneT - r.realStart); }
+        const dsec = x =&gt; { const m = Math.round(x / 60); return `${Math.floor(m / 60)} h ${pad(m % 60)} min`; };
+        const dcyc = cyc.A &gt; 0 ? (cyc.B - cyc.A) / cyc.A * 100 : NaN;
+        $('parNote').textContent = `Camino total de las ${list.length} órdenes (con salida y regreso): actual ${nf(P.tot.A)} m · ${P.keyB === 'future' ? 'futuro' : 'actual por secuencia'} ${nf(P.tot.B)} m (${nf(delta, 1)}%). Tiempo de ciclo acumulado (salida→regreso): actual ${dsec(cyc.A)} · ${P.keyB === 'future' ? 'futuro' : 'por secuencia'} ${dsec(cyc.B)} (${nf(dcyc, 1)}%). Cada orden sale a su hora real: la 1.ª confirmación menos lo que tarda en dejar los KLT y llegar a su primera ubicación; en el actual cada confirmación cae a su hora real. Mismo color de picker en los dos planos.`;
+        frame();
+      }catch(e){
+        console.warn('v65:', e);
+        body.innerHTML = `&lt;p class="muted par-msg"&gt;No se pudo simular: ${esc(e?.message || e)}&lt;/p&gt;`;
+      }finally{ P.busy = false; }
+    }, 40);
+  }
+  function rebuildSoon(force){ clearTimeout(P.timer); P.timer = setTimeout(() =&gt; build(force), 250); }
+
+  /* ---------- Dibujo ---------- */
+  function drawPanels(L){
+    const body = $('parBody'), RCx = RC();
+    const NAMES = RCx.NAMES, COL = RCx.COLORS;
+    const kb = P.keyB;
+    body.innerHTML = `&lt;div class="par-grid"&gt;${[['A', 'actual'], ['B', kb]].map(([side, k]) =&gt; `
+      &lt;div class="par-col"&gt;
+        &lt;div class="par-title"&gt;&lt;i style="background:${COL[k]}"&gt;&lt;/i&gt;&lt;b&gt;Layout ${side === 'A' ? 'ACTUAL' : (kb === 'future' ? 'FUTURO' : 'ACTUAL por secuencia')}&lt;/b&gt;&lt;span class="par-m" id="parM${side}"&gt;&lt;/span&gt;&lt;/div&gt;
+        &lt;div class="rec-stage"&gt;&lt;svg id="parSvg${side}" xmlns="http://www.w3.org/2000/svg"&gt;&lt;/svg&gt;&lt;/div&gt;
+      &lt;/div&gt;`).join('')}&lt;/div&gt;`;
+    // límites del plano: bins de picking (CVPZ) del layout
+    const type = new Map(State.bins.map(b =&gt; [b.bin, b.storageType]));
+    const pos = [];
+    for(const [bin, p] of L.positions) if(!type.size || type.get(bin) === 'CVPZ' || !type.has(bin)) pos.push([bin, p]);
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for(const [, p] of pos){ minX = Math.min(minX, p.x - p.sx / 2); maxX = Math.max(maxX, p.x + p.sx / 2); minZ = Math.min(minZ, p.z - p.sz / 2); maxZ = Math.max(maxZ, p.z + p.sz / 2); }
+    for(const t of P.tracks) for(const m of P.marks.get(t.id) || []){ minX = Math.min(minX, m.x); maxX = Math.max(maxX, m.x); minZ = Math.min(minZ, m.z); maxZ = Math.max(maxZ, m.z); }
+    const padv = 8, w = Math.max(maxX - minX + padv * 2, 60), h = Math.max(maxZ - minZ + padv * 2, 30);
+    const vx = (minX + maxX) / 2 - w / 2, vz = (minZ + maxZ) / 2 - h / 2;
+    let racks = '';
+    for(const [, p] of pos) racks += `&lt;rect x="${(p.x - p.sx / 2).toFixed(2)}" y="${(p.z - p.sz / 2).toFixed(2)}" width="${p.sx.toFixed(2)}" height="${p.sz.toFixed(2)}" fill="${GROUP_FILL[p.group] || '#34495e'}" opacity=".72"/&gt;`;
+    const seen = new Set(); let labels = '';
+    for(const [, p] of pos){
+      if(seen.has(p.aisle)) continue;
+      seen.add(p.aisle);
+      labels += `&lt;text x="${(vx + 1).toFixed(1)}" y="${(p.z + .6).toFixed(2)}" font-size="1.9" fill="#9fc4e8" opacity=".85"&gt;${esc(p.aisle)}&lt;/text&gt;`;
+    }
+    P.els.clear(); P.doneCount.clear();
+    for(const side of ['A', 'B']){
+      const svg = $('parSvg' + side);
+      svg.setAttribute('viewBox', `${vx.toFixed(2)} ${vz.toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)}`);
+      svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+      let marks = '', ags = '';
+      for(const t of P.tracks.filter(x =&gt; x.side === side)){
+        const ms = P.marks.get(t.id) || [];
+        marks += ms.map((m, i) =&gt; `&lt;circle id="pm${t.id}_${i}" cx="${m.x.toFixed(2)}" cy="${m.z.toFixed(2)}" r=".62" fill="#0b1b2e" stroke="${t.color}" stroke-width=".28"/&gt;`).join('');
+        ags += `&lt;g class="par-ag" id="pa${t.id}" style="display:none"&gt;&lt;circle r="1.35" fill="${t.color}" stroke="#fff" stroke-width=".28"/&gt;&lt;text y="-1.9"&gt;${esc(String(t.picker).slice(0, 9))}&lt;/text&gt;&lt;/g&gt;`;
+      }
+      svg.innerHTML = `&lt;rect x="${vx.toFixed(2)}" y="${vz.toFixed(2)}" width="${w.toFixed(2)}" height="${h.toFixed(2)}" fill="#04101d"/&gt;${racks}${labels}${marks}${ags}`;
+      for(const t of P.tracks.filter(x =&gt; x.side === side)) P.els.set(t.id, {g: svg.querySelector('#pa' + t.id), n: (P.marks.get(t.id) || []).length, svg});
+      UI()?.attachZoom?.(svg, {group: 'par2', noFollow: true});
+    }
+  }
+  const UI = () =&gt; window.__PickingUi;
+
+  function frame(){
+    const sim = P.sim;
+    if(!sim) return;
+    const idx = Math.max(0, Math.min(sim.steps - 1, Math.floor((P.t - sim.T0) / (SIM().DT || .4))));
+    const started = P.t &gt;= sim.T0;
+    const live = {A: 0, B: 0}, done = {A: 0, B: 0}, nT = {A: 0, B: 0}, pickSecNow = AMd()?.disp?.pickSec || 30;
+    for(const t of P.tracks){
+      nT[t.side]++;
+      const e = P.els.get(t.id), r = sim.ag.get(t.id);
+      if(!e || !r) continue;
+      const st = started ? r.st[idx] : 255;
+      if(st === 255){ e.g.style.display = 'none'; continue; }
+      const dm = r.dist[idx], pos = r.at(dm);
+      e.g.style.display = '';
+      e.g.setAttribute('transform', `translate(${pos.x.toFixed(2)} ${pos.z.toFixed(2)})`);
+      e.g.style.opacity = st === 4 ? .35 : st === 3 ? .6 : 1;
+      live[t.side] += dm;
+      if(st === 4) done[t.side]++;
+      let c = 0;
+      for(let i = 0; i &lt; e.n; i++){ const a = r.confirm ? r.confirm[i] : (r.arrive[i] != null ? r.arrive[i] + pickSecNow : null); if(a != null &amp;&amp; P.t &gt;= a) c++; }
+      if(P.doneCount.get(t.id) !== c){
+        P.doneCount.set(t.id, c);
+        for(let i = 0; i &lt; e.n; i++) e.svg.querySelector(`#pm${t.id}_${i}`)?.setAttribute('fill', i &lt; c ? t.color : '#0b1b2e');
+      }
+    }
+    for(const side of ['A', 'B']){
+      const el = $('parM' + side);
+      if(el) el.textContent = `${done[side]}/${nT[side]} órdenes terminadas · ${nf(live[side])} / ${nf(P.tot[side])} m`;
+    }
+    const clock = $('parClock'); if(clock) clock.textContent = hms(P.t);
+    const sl = $('parSlider'); if(sl) sl.value = String(Math.round((P.t - P.tA) / Math.max(1, P.tB - P.tA) * 1000));
+  }
+
+  function tick(now){
+    if(!P.playing) return;
+    const dt = Math.min(100, now - P.last) / 1000; P.last = now;
+    P.t = Math.min(P.tB, P.t + dt * P.speed);
+    frame();
+    if(P.t &gt;= P.tB){ stop(); return; }
+    P.raf = requestAnimationFrame(tick);
+  }
+  function play(){
+    if(!P.sim){ build(true); return; }
+    if(P.t &gt;= P.tB) P.t = P.tA;
+    P.playing = true; P.last = performance.now();
+    const b = $('parPlay'); if(b) b.textContent = '⏸ Pausar';
+    P.raf = requestAnimationFrame(tick);
+  }
+  function stop(){
+    P.playing = false; cancelAnimationFrame(P.raf);
+    const b = $('parPlay'); if(b) b.textContent = '▶ Reproducir';
+  }
+
+  /* ---------- Arranque ---------- */
+  function scan(){
+    try{
+      if(!ensureCard()) return;
+      const sec = $('pkParalela');
+      if(!sec.dataset.bound){ sec.dataset.bound = '1'; refreshDates(); }
+      if(document.getElementById('view-picking')?.classList.contains('active') &amp;&amp; !sec.classList.contains('pk-collapsed')) build(false);
+    }catch(e){ console.warn('v65:', e); }
+  }
+  let timer = 0;
+  const schedule = () =&gt; { clearTimeout(timer); timer = setTimeout(scan, 400); };
+
+  const baseSwitchViewV65 = switchView;
+  switchView = function(key){
+    const r = baseSwitchViewV65.apply(this, arguments);
+    if(key === 'picking') setTimeout(scan, 500);
+    else stop();
+    return r;
+  };
+  function bindV65(){
+    const v = document.getElementById('view-picking');
+    if(!v) return;
+    new MutationObserver(schedule).observe(v, {childList: true, subtree: true});
+    scan();
+  }
+  window.__SimParalela = {build, play, stop, state: P};
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () =&gt; setTimeout(bindV65, 2000), {once: true});
+  else setTimeout(bindV65, 2000);
 })();
 ;
 
