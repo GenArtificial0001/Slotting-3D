@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#071225">
 <meta name="slotting-baseline" content="FAVORITA-v14-v18-v19-v20-v21-v22-v23-progress-safe-render">
-<title>Sistema de Slotting 3D Inteligente · v70 · Ruta en la lista del recorrido</title>
+<title>Sistema de Slotting 3D Inteligente · v71 · Colores por ruta o grupo de Lineside</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300,0,0" rel="stylesheet">
@@ -8200,7 +8200,7 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
        glifos Unicode del sistema.
      - Ya cumplido por la app (v41): guarda de window.define en <head>, restauración al final, sin <script src>,
        un solo HTML, guarda de doble inicio (window.__slotting3dInitialized), sin alert/confirm/prompt nativos. */
-  const BUILD = {version: 'v70', date: '2026-11-05', file: 'Slotting-3D.html'};
+  const BUILD = {version: 'v71', date: '2026-11-05', file: 'Slotting-3D.html'};
   window.__SLOTTING_BUILD = BUILD;
 
   function marker(){
@@ -8830,4 +8830,190 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
   .rec-shared{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;background:#7a4ce0;color:#fff;font-size:10px;font-weight:700;letter-spacing:.03em}
   .rec-stop{color:#ff8a8a;font-weight:700;font-size:11px}
 </style>
+<style id="v71-color-lineside-css">
+  #colorModeField select{height:40px}
+  .eye-row input.ls-color{width:34px;height:26px;padding:0;border:0;background:none;cursor:pointer}
+</style>
+<script id="v71-color-lineside">
+(() => {
+  'use strict';
+  /* v71 - Gemelo 3D: colores por RUTA o por GRUPO DE LINESIDE.
+     Grupo de lineside = el lineside desde el inicio hasta el segundo guion SIN incluirlo (C-FT1-028S → C-FT1,
+     T-IP-001N → T-IP). Con un solo guion se toma lo que va antes (KR16-14 → KR16). Se configura en el drawer de filtros
+     del layout: selector «Colorear el 3D por», sección «Grupo Lineside» (un color por grupo + ojo para ocultar) y color
+     de las piezas compartidas (producto con linesides de más de un grupo). Respeta el resto de reglas de color
+     (sin SMART en blanco, bloqueos, ABC, puestos múltiples, stock): solo reemplaza el color de ruta. Se persiste en
+     slottingColorModeV71. En «Vista: Futura» pinta la distribución futura. */
+  if(typeof binColor !== 'function' || typeof routeColor !== 'function' || typeof getVisibleBins !== 'function') return;
+  const KEY = 'slottingColorModeV71';
+  const CM = {mode: 'route', colors: {}, shared: '#c05cff', cur: null};
+  try{ Object.assign(CM, JSON.parse(localStorage.getItem(KEY) || '{}'), {cur: null}); }catch(e){}
+  const save = () => { try{ localStorage.setItem(KEY, JSON.stringify({mode: CM.mode, colors: CM.colors, shared: CM.shared})); }catch(e){} };
+  const esc2 = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+
+  const lsGroup = ls => {
+    const parts = String(ls || '').trim().toUpperCase().split('-');
+    return parts.length >= 3 ? `${parts[0]}-${parts[1]}` : parts[0];
+  };
+  const groupsOfList = list => [...new Set((list || []).filter(Boolean).map(lsGroup).filter(Boolean))];
+
+  let gCache = {n: -1, src: null, list: []};
+  function allGroups(){
+    const prods = State.products || {}, n = Object.keys(prods).length;
+    if(gCache.src === prods && gCache.n === n) return gCache.list;
+    const set = new Set();
+    for(const p of Object.values(prods)) for(const g of groupsOfList(p.linesides)) set.add(g);
+    gCache = {n, src: prods, list: [...set].sort()};
+    return gCache.list;
+  }
+  const autoColor = g => {
+    const i = Math.max(0, allGroups().indexOf(g));
+    return `hsl(${Math.round((i * 137.508) % 360)} 72% ${[52, 42, 62][i % 3]}%)`;
+  };
+  const colorOf = g => CM.colors[g] || autoColor(g);
+
+  /* ---------- color del 3D ---------- */
+  const baseRouteColorV71 = routeColor;
+  routeColor = function(route){
+    const b = CM.cur;
+    if(CM.mode === 'lsgroup' && b){
+      const gs = groupsOfList(b.linesides?.length ? b.linesides : [b.lineside]);
+      if(!gs.length) return '#7f8b98';
+      return gs.length > 1 ? CM.shared : colorOf(gs[0]);
+    }
+    return baseRouteColorV71.apply(this, arguments);
+  };
+  const baseBinColorV71 = binColor;
+  binColor = function(b){
+    if(CM.mode !== 'lsgroup') return baseBinColorV71.apply(this, arguments);
+    CM.cur = b;
+    try{ return baseBinColorV71.apply(this, arguments); }finally{ CM.cur = null; }
+  };
+
+  /* ---------- ocultar por grupo ---------- */
+  const baseGetVisibleBinsV71 = getVisibleBins;
+  getVisibleBins = function(){
+    const r = baseGetVisibleBinsV71.apply(this, arguments);
+    const hid = State.filters?.hiddenLsGroups;
+    if(!hid?.length) return r;
+    const hs = new Set(hid);
+    return r.filter(b => !(b.product && groupsOfList(b.linesides).some(g => hs.has(g))));
+  };
+
+  /* ---------- leyenda ---------- */
+  const baseRenderLegendV71 = renderLegend;
+  renderLegend = function(){
+    const r = baseRenderLegendV71.apply(this, arguments);
+    if(CM.mode !== 'lsgroup' || State.slotting?.visualMode === 'abc') return r;
+    try{
+      const vis = getVisibleBins(), gs = new Set();
+      let shared = 0;
+      for(const b of vis){ if(!b.product) continue; const g = groupsOfList(b.linesides); g.forEach(x => gs.add(x)); if(g.length > 1) shared++; }
+      const list = [...gs].sort(), max = 60;
+      const legend = document.getElementById('legend');
+      if(legend) legend.innerHTML = `<span class="legend-item"><i class="dot" style="background:#596675"></i>Vacía</span><span class="legend-item"><i class="dot" style="background:${CM.shared}"></i>Compartida (${shared})</span>`
+        + list.slice(0, max).map(g => `<span class="legend-item"><i class="dot" style="background:${colorOf(g)}"></i>${esc2(g)}</span>`).join('')
+        + (list.length > max ? `<span class="legend-item">+${list.length - max} grupos</span>` : '')
+        + '<span class="legend-item"><i class="dot" style="background:#ff5d73"></i>Bloqueada/obra</span>';
+    }catch(e){}
+    return r;
+  };
+
+  const refreshScene3d = () => { try{ Renderer.uploadInstances(); }catch(e){} try{ renderLegend(); }catch(e){} };
+
+  /* ---------- UI en el drawer de filtros ---------- */
+  const hidden = () => new Set(State.filters?.hiddenLsGroups || []);
+  function renderLsGroupFilter(){
+    const list = document.getElementById('eyeList-lsgroup');
+    if(!list) return;
+    const values = allGroups(), hid = hidden();
+    const term = String(document.getElementById('eyeSearch-lsgroup')?.value || '').trim().toUpperCase();
+    const matched = values.filter(v => !term || v.includes(term)), shown = matched.slice(0, 220);
+    list.innerHTML = shown.map(v => `<div class="eye-row"><span title="${esc2(v)}">${esc2(v)}</span><input type="color" class="ls-color" data-g="${esc2(v)}" value="${toHex(colorOf(v))}"><button class="eye-btn ${hid.has(v) ? 'hidden-value' : ''}" data-g="${esc2(v)}" title="${hid.has(v) ? 'Mostrar' : 'Ocultar'} ${esc2(v)}">${hid.has(v) ? '🚫' : '👁'}</button></div>`).join('')
+      + (matched.length > 220 ? `<div class="eye-more">Mostrando 220 de ${matched.length}. Escribí para buscar.</div>` : '');
+    const cnt = document.getElementById('eyeCount-lsgroup');
+    if(cnt) cnt.textContent = `${values.length - hid.size}/${values.length}`;
+  }
+  function setHidden(set){
+    State.filters.hiddenLsGroups = [...set];
+    renderLsGroupFilter();
+    try{ Renderer.setData(getVisibleBins(), true); }catch(e){}
+    try{ renderLegend(); }catch(e){}
+  }
+
+  function ensureDom(){
+    const ref = document.getElementById('eyeCount-lineside')?.closest('details.eye-filter');
+    if(!ref) return false;
+    if(!document.getElementById('colorModeField')){
+      const f = document.createElement('div');
+      f.className = 'field full';
+      f.id = 'colorModeField';
+      f.style.marginBottom = '10px';
+      f.innerHTML = `<label>Colorear el 3D por</label>
+        <select id="colorModeSel" class="input"><option value="route">Ruta</option><option value="lsgroup">Grupo de Lineside (C-FT1-028S → C-FT1)</option></select>
+        <label style="margin-top:8px">Color de piezas compartidas (linesides de más de un grupo)</label>
+        <input id="lsSharedColor" type="color" class="input" style="height:40px;padding:4px">`;
+      ref.parentElement.before(f);
+      f.querySelector('#colorModeSel').addEventListener('change', e => { CM.mode = e.target.value; save(); refreshScene3d(); try{ toast(CM.mode === 'lsgroup' ? 'Colores por grupo de Lineside' : 'Colores por ruta', 'ok', 2500); }catch(err){} });
+      f.querySelector('#lsSharedColor').addEventListener('input', e => { CM.shared = e.target.value; save(); refreshScene3d(); });
+    }
+    if(!document.getElementById('eyeList-lsgroup')){
+      const d = document.createElement('details');
+      d.className = 'eye-filter';
+      d.innerHTML = `<summary><span>👁 Grupo Lineside</span><span id="eyeCount-lsgroup"></span></summary><div class="eye-filter-body"><input id="eyeSearch-lsgroup" class="input" placeholder="Buscar Grupo de Lineside"><div class="eye-actions"><button class="btn small" id="lsShowAll" type="button">Mostrar todo</button><button class="btn small ghost" id="lsHideAll" type="button">Ocultar todo</button><button class="btn small ghost" id="lsResetColors" type="button">Colores automáticos</button></div><div id="eyeList-lsgroup" class="eye-list"></div></div>`;
+      ref.after(d);
+      d.querySelector('#eyeSearch-lsgroup').addEventListener('input', renderLsGroupFilter);
+      d.querySelector('#lsShowAll').addEventListener('click', () => setHidden(new Set()));
+      d.querySelector('#lsHideAll').addEventListener('click', () => setHidden(new Set(allGroups())));
+      d.querySelector('#lsResetColors').addEventListener('click', () => { CM.colors = {}; save(); renderLsGroupFilter(); refreshScene3d(); });
+      const list = d.querySelector('#eyeList-lsgroup');
+      list.addEventListener('click', e => {
+        const b = e.target.closest('button.eye-btn[data-g]');
+        if(!b) return;
+        const set = hidden();
+        set.has(b.dataset.g) ? set.delete(b.dataset.g) : set.add(b.dataset.g);
+        setHidden(set);
+      });
+      list.addEventListener('input', e => {
+        const i = e.target.closest('input.ls-color[data-g]');
+        if(!i) return;
+        CM.colors[i.dataset.g] = i.value; save(); refreshScene3d();
+      });
+    }
+    const sel = document.getElementById('colorModeSel');
+    if(sel) sel.value = CM.mode;
+    const sh = document.getElementById('lsSharedColor');
+    if(sh) sh.value = CM.shared;
+    renderLsGroupFilter();
+    return true;
+  }
+
+  // El drawer se reconstruye al cambiar datos/filtros: se vuelve a asegurar y a pintar la lista de grupos.
+  const baseBuildFilterUiV71 = buildFilterUi;
+  buildFilterUi = function(){
+    const r = baseBuildFilterUiV71.apply(this, arguments);
+    try{ ensureDom(); }catch(e){}
+    return r;
+  };
+  const baseRenderAllEyeV71 = renderAllEyeFilters;
+  renderAllEyeFilters = function(){
+    const r = baseRenderAllEyeV71.apply(this, arguments);
+    try{ renderLsGroupFilter(); }catch(e){}
+    return r;
+  };
+  const baseResetFiltersV71 = resetFilters;
+  resetFilters = function(){
+    const r = baseResetFiltersV71.apply(this, arguments);
+    try{ if(State.filters) State.filters.hiddenLsGroups = []; renderLsGroupFilter(); }catch(e){}
+    return r;
+  };
+
+  window.__ColorMode = {state: CM, lsGroup, groupsOfList, colorOf, allGroups, refresh: refreshScene3d};
+  function bindV71(){
+    try{ ensureDom(); if(CM.mode === 'lsgroup') refreshScene3d(); }catch(e){ console.warn('v71:', e); }
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(bindV71, 900), {once: true});
+  else setTimeout(bindV71, 900);
+})();
+</script>
 </body></html>
