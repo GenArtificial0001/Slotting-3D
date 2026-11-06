@@ -8,7 +8,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#071225">
 <meta name="slotting-baseline" content="FAVORITA-v14-v18-v19-v20-v21-v22-v23-progress-safe-render">
-<title>Sistema de Slotting 3D Inteligente · v69 · Recorrido único con lista dinámica</title>
+<title>Sistema de Slotting 3D Inteligente · v70 · Ruta en la lista del recorrido</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300,0,0" rel="stylesheet">
@@ -6650,6 +6650,13 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
     const ls = (State.products?.[m.product]?.linesides || []).filter(Boolean);
     return [...new Set(ls.length ? ls : [t?.supplyArea].filter(Boolean))];
   };
+  // Ruta o rutas del producto separadas por « / »; la de la orden va en negrita.
+  const rutasHtml = (m, t) =&gt; {
+    const rs = [...new Set((State.products?.[m.product]?.routes || []).map(r =&gt; String(r).toUpperCase()).filter(Boolean))];
+    const own = String(REC.data?.list?.[0]?.route || '').toUpperCase();
+    const list = rs.length ? rs : [String(t?.route || '').toUpperCase()].filter(Boolean);
+    return list.length ? list.map(r =&gt; r === own ? `&lt;b&gt;${esc(r)}&lt;/b&gt;` : esc(r)).join(' / ') : '—';
+  };
   const fmtDur = sec =&gt; `${Math.floor(sec / 60)} min ${String(Math.round(sec % 60)).padStart(2, '0')} s`;
 
   // Pinta la lista a medida que el picker llega a cada ubicación (pendiente → en la ubicación → confirmado / parado).
@@ -6753,7 +6760,7 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
       &lt;div class="rec-stats" id="recStats"&gt;&lt;/div&gt;
       &lt;div class="rec-stage"&gt;&lt;svg id="recSvg" xmlns="http://www.w3.org/2000/svg"&gt;&lt;/svg&gt;&lt;/div&gt;
       &lt;div class="pro-table-wrap rec-list-scroll" id="recListBox" style="margin-top:10px"&gt;&lt;table class="pro-table pk-table"&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;#&lt;/th&gt;
-        ${keys.map(k =&gt; `&lt;th&gt;${NAMES[k]}: ubicación&lt;/th&gt;&lt;th&gt;Sec.&lt;/th&gt;&lt;th&gt;Lineside&lt;/th&gt;&lt;th&gt;Tramo (m)&lt;/th&gt;&lt;th&gt;A pie (s)&lt;/th&gt;&lt;th&gt;Acum. (m)&lt;/th&gt;&lt;th&gt;${k === 'actual' ? 'Confirmación real' : 'Hora estimada'}&lt;/th&gt;${k === 'actual' &amp;&amp; out.actual.real ? '&lt;th&gt;Real entre picks (s)&lt;/th&gt;' : ''}`).join('')}&lt;/tr&gt;&lt;/thead&gt;&lt;tbody id="recRows"&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/div&gt;
+        ${keys.map(k =&gt; `&lt;th&gt;${NAMES[k]}: ubicación&lt;/th&gt;&lt;th&gt;Sec.&lt;/th&gt;&lt;th&gt;Ruta&lt;/th&gt;&lt;th&gt;Lineside&lt;/th&gt;&lt;th&gt;Tramo (m)&lt;/th&gt;&lt;th&gt;A pie (s)&lt;/th&gt;&lt;th&gt;Acum. (m)&lt;/th&gt;&lt;th&gt;${k === 'actual' ? 'Confirmación real' : 'Hora estimada'}&lt;/th&gt;${k === 'actual' &amp;&amp; out.actual.real ? '&lt;th&gt;Real entre picks (s)&lt;/th&gt;' : ''}`).join('')}&lt;/tr&gt;&lt;/thead&gt;&lt;tbody id="recRows"&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/div&gt;
       &lt;p class="muted fut-note"&gt;Plano en vista superior con las medidas de la tarjeta Geometría (pasillo ${fmt(GEO.lane, 2)} m, Only ${fmt(GEO.depthOnly, 2)} m, Double ${fmt(GEO.depthDouble, 2)} m, ${fmt(GEO.binPitch, 2)} m por ubicación, vuelta de carro ${fmt(GEO.turn || 0, 2)} m por cambio de pasillo o de sentido: el picker se detiene en el lugar y suma esos metros). El picker camina por el pasillo peatonal de cada cara y cambia de pasillo por las calles entre bloques o por los extremos. Sin punto de partida ni entrega.&lt;/p&gt;`;
     drawStage();
     fillRows();
@@ -6806,13 +6813,14 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
       html += `&lt;tr&gt;&lt;td&gt;${i + 1}&lt;/td&gt;${keys.map(k =&gt; {
         const m = out[k].marks[i], s = i &gt; 0 ? out[k].segs[i - 1] : null, real = k === 'actual' ? out.actual.real : null;
         const a = simAt(k), r = a?.r, v = k === 'actual' ? (out.vcal || REC.walk) : vPick();
-        const cols = real ? 8 : 7;
+        const cols = real ? 9 : 8;
         if(!m) return `&lt;td data-k="${k}"&gt;—&lt;/td&gt;`.repeat(1) + Array(cols - 1).fill(`&lt;td data-k="${k}"&gt;—&lt;/td&gt;`).join('');
         const ls = linesOf(m, k === 'actual' ? list[i] : null), shared = ls.length &gt; 1;
         const idle = r?.idle?.find(e =&gt; e.i === i);
         const hora = k === 'actual' ? clockOf(list[i].ts) : (r?.confirm[i] != null ? clockOf(r.confirm[i]) : '—');
         let tds = `&lt;td data-k="${k}"&gt;${esc(m.bin)}${m.from &amp;&amp; m.from !== m.bin ? ` &lt;span class="muted"&gt;(antes ${esc(m.from)})&lt;/span&gt;` : ''}&lt;br&gt;&lt;span class="muted"&gt;${esc(m.product || '')}&lt;/span&gt;${idle &amp;&amp; idle.sec &gt;= 20 ? `&lt;br&gt;&lt;span class="rec-stop"&gt;parado ${fmtDur(idle.sec)}&lt;/span&gt;` : ''}&lt;/td&gt;`
           + `&lt;td data-k="${k}" class="n"&gt;${seqOf(m.bin)}&lt;/td&gt;`
+          + `&lt;td data-k="${k}"&gt;${rutasHtml(m, k === 'actual' ? list[i] : null)}&lt;/td&gt;`
           + `&lt;td data-k="${k}"&gt;${ls.length ? esc(ls.join(' / ')) : '—'}${shared ? ' &lt;span class="rec-shared"&gt;Compartida&lt;/span&gt;' : ''}&lt;/td&gt;`
           + `&lt;td data-k="${k}" class="n"&gt;${s ? fmt(s.m, 1) : '—'}&lt;/td&gt;&lt;td data-k="${k}" class="n"&gt;${s ? fmt(s.m / v, 1) : '—'}&lt;/td&gt;&lt;td data-k="${k}" class="n"&gt;${fmt(i &gt; 0 ? s.cum : 0, 1)}&lt;/td&gt;&lt;td data-k="${k}" class="n"&gt;${hora}&lt;/td&gt;`;
         if(real) tds += `&lt;td data-k="${k}" class="n"&gt;${i &gt; 0 ? fmt(real.legSec[i]) : '—'}&lt;/td&gt;`;
@@ -8302,7 +8310,7 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
        glifos Unicode del sistema.
      - Ya cumplido por la app (v41): guarda de window.define en &lt;head&gt;, restauración al final, sin &lt;script src&gt;,
        un solo HTML, guarda de doble inicio (window.__slotting3dInitialized), sin alert/confirm/prompt nativos. */
-  const BUILD = {version: 'v69', date: '2026-11-05', file: 'Slotting-3D.html'};
+  const BUILD = {version: 'v70', date: '2026-11-05', file: 'Slotting-3D.html'};
   window.__SLOTTING_BUILD = BUILD;
 
   function marker(){

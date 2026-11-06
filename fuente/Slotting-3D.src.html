@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#071225">
 <meta name="slotting-baseline" content="FAVORITA-v14-v18-v19-v20-v21-v22-v23-progress-safe-render">
-<title>Sistema de Slotting 3D Inteligente · v69 · Recorrido único con lista dinámica</title>
+<title>Sistema de Slotting 3D Inteligente · v70 · Ruta en la lista del recorrido</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300,0,0" rel="stylesheet">
@@ -6492,6 +6492,13 @@ body.in-sharepoint .inicio-grid{min-height:calc(var(--sp-app-height,78dvh) - 152
     const ls = (State.products?.[m.product]?.linesides || []).filter(Boolean);
     return [...new Set(ls.length ? ls : [t?.supplyArea].filter(Boolean))];
   };
+  // Ruta o rutas del producto separadas por « / »; la de la orden va en negrita.
+  const rutasHtml = (m, t) => {
+    const rs = [...new Set((State.products?.[m.product]?.routes || []).map(r => String(r).toUpperCase()).filter(Boolean))];
+    const own = String(REC.data?.list?.[0]?.route || '').toUpperCase();
+    const list = rs.length ? rs : [String(t?.route || '').toUpperCase()].filter(Boolean);
+    return list.length ? list.map(r => r === own ? `<b>${esc(r)}</b>` : esc(r)).join(' / ') : '—';
+  };
   const fmtDur = sec => `${Math.floor(sec / 60)} min ${String(Math.round(sec % 60)).padStart(2, '0')} s`;
 
   // Pinta la lista a medida que el picker llega a cada ubicación (pendiente → en la ubicación → confirmado / parado).
@@ -6595,7 +6602,7 @@ body.in-sharepoint .inicio-grid{min-height:calc(var(--sp-app-height,78dvh) - 152
       <div class="rec-stats" id="recStats"></div>
       <div class="rec-stage"><svg id="recSvg" xmlns="http://www.w3.org/2000/svg"></svg></div>
       <div class="pro-table-wrap rec-list-scroll" id="recListBox" style="margin-top:10px"><table class="pro-table pk-table"><thead><tr><th>#</th>
-        ${keys.map(k => `<th>${NAMES[k]}: ubicación</th><th>Sec.</th><th>Lineside</th><th>Tramo (m)</th><th>A pie (s)</th><th>Acum. (m)</th><th>${k === 'actual' ? 'Confirmación real' : 'Hora estimada'}</th>${k === 'actual' && out.actual.real ? '<th>Real entre picks (s)</th>' : ''}`).join('')}</tr></thead><tbody id="recRows"></tbody></table></div>
+        ${keys.map(k => `<th>${NAMES[k]}: ubicación</th><th>Sec.</th><th>Ruta</th><th>Lineside</th><th>Tramo (m)</th><th>A pie (s)</th><th>Acum. (m)</th><th>${k === 'actual' ? 'Confirmación real' : 'Hora estimada'}</th>${k === 'actual' && out.actual.real ? '<th>Real entre picks (s)</th>' : ''}`).join('')}</tr></thead><tbody id="recRows"></tbody></table></div>
       <p class="muted fut-note">Plano en vista superior con las medidas de la tarjeta Geometría (pasillo ${fmt(GEO.lane, 2)} m, Only ${fmt(GEO.depthOnly, 2)} m, Double ${fmt(GEO.depthDouble, 2)} m, ${fmt(GEO.binPitch, 2)} m por ubicación, vuelta de carro ${fmt(GEO.turn || 0, 2)} m por cambio de pasillo o de sentido: el picker se detiene en el lugar y suma esos metros). El picker camina por el pasillo peatonal de cada cara y cambia de pasillo por las calles entre bloques o por los extremos. Sin punto de partida ni entrega.</p>`;
     drawStage();
     fillRows();
@@ -6648,13 +6655,14 @@ body.in-sharepoint .inicio-grid{min-height:calc(var(--sp-app-height,78dvh) - 152
       html += `<tr><td>${i + 1}</td>${keys.map(k => {
         const m = out[k].marks[i], s = i > 0 ? out[k].segs[i - 1] : null, real = k === 'actual' ? out.actual.real : null;
         const a = simAt(k), r = a?.r, v = k === 'actual' ? (out.vcal || REC.walk) : vPick();
-        const cols = real ? 8 : 7;
+        const cols = real ? 9 : 8;
         if(!m) return `<td data-k="${k}">—</td>`.repeat(1) + Array(cols - 1).fill(`<td data-k="${k}">—</td>`).join('');
         const ls = linesOf(m, k === 'actual' ? list[i] : null), shared = ls.length > 1;
         const idle = r?.idle?.find(e => e.i === i);
         const hora = k === 'actual' ? clockOf(list[i].ts) : (r?.confirm[i] != null ? clockOf(r.confirm[i]) : '—');
         let tds = `<td data-k="${k}">${esc(m.bin)}${m.from && m.from !== m.bin ? ` <span class="muted">(antes ${esc(m.from)})</span>` : ''}<br><span class="muted">${esc(m.product || '')}</span>${idle && idle.sec >= 20 ? `<br><span class="rec-stop">parado ${fmtDur(idle.sec)}</span>` : ''}</td>`
           + `<td data-k="${k}" class="n">${seqOf(m.bin)}</td>`
+          + `<td data-k="${k}">${rutasHtml(m, k === 'actual' ? list[i] : null)}</td>`
           + `<td data-k="${k}">${ls.length ? esc(ls.join(' / ')) : '—'}${shared ? ' <span class="rec-shared">Compartida</span>' : ''}</td>`
           + `<td data-k="${k}" class="n">${s ? fmt(s.m, 1) : '—'}</td><td data-k="${k}" class="n">${s ? fmt(s.m / v, 1) : '—'}</td><td data-k="${k}" class="n">${fmt(i > 0 ? s.cum : 0, 1)}</td><td data-k="${k}" class="n">${hora}</td>`;
         if(real) tds += `<td data-k="${k}" class="n">${i > 0 ? fmt(real.legSec[i]) : '—'}</td>`;
@@ -8192,7 +8200,7 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
        glifos Unicode del sistema.
      - Ya cumplido por la app (v41): guarda de window.define en <head>, restauración al final, sin <script src>,
        un solo HTML, guarda de doble inicio (window.__slotting3dInitialized), sin alert/confirm/prompt nativos. */
-  const BUILD = {version: 'v69', date: '2026-11-05', file: 'Slotting-3D.html'};
+  const BUILD = {version: 'v70', date: '2026-11-05', file: 'Slotting-3D.html'};
   window.__SLOTTING_BUILD = BUILD;
 
   function marker(){
