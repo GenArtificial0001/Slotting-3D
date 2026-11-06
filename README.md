@@ -1,55 +1,34 @@
-# Slotting 3D — publicación en GitHub
+# Slotting 3D
 
-## Recomendación de seguridad
+Visualizador 3D de slotting de almacén con simulación del recorrido del picker (metros, tiempos, escenario actual vs. futuro). Es una única página HTML sin backend: todo corre en el navegador y los Excel que cargues **no salen de tu equipo**.
 
-La versión corporativa puede contener datos reales incrustados dentro del HTML. Aunque se active Modo Demo, un repositorio público permite inspeccionar el código fuente completo. Para publicar en abierto, usar una compilación sanitizada que no incluya datos reales precargados.
+## Versión pública = sin datos
 
-## Estructura sugerida
+Esta compilación **no trae ningún dato real precargado**: arranca vacía y los datos se cargan desde la pestaña *Fuentes de datos* (o con *Importar carpeta*). El dataset embebido de la versión corporativa se reemplaza por uno vacío en el build (`--public`), que además falla si detecta un código real conocido.
 
-```text
-slotting-3d/
-├─ index.html
-├─ README.md
-└─ screenshots/
+## Archivos
+
+| Archivo | Qué es |
+|---|---|
+| `index.html` | App lista para publicar (GitHub Pages). **Generado**, no editar a mano. |
+| `fuente/Slotting-3D.src.html` | Fuente (bloques `vNN` apilados). Es lo que se edita. |
+| `build-sharepoint.py` | Genera el HTML final: une el JS en un solo programa y ata los `onclick` por código (necesario en SharePoint por su CSP). |
+| `vendor/xlsx.full.min.js` | SheetJS 0.18.5 (Apache-2.0), embebido en el build para la vista Packaging. |
+
+## Compilar
+
+```bash
+python build-sharepoint.py --public salida/   # versión pública: salida/index.html + salida/fuente/
+python build-sharepoint.py                    # versión corporativa (requiere el dataset real; no publicar)
 ```
 
-Renombrar la versión que se publicará a `index.html`.
+Sin dependencias (solo biblioteca estándar de Python). Para probar: `python -m http.server 8000` y abrir `http://localhost:8000/`.
 
-## Subir con Git desde Windows PowerShell
+## GitHub Pages
 
-```powershell
-mkdir slotting-3d
-cd slotting-3d
-Copy-Item "C:\RUTA\Sistema_Slotting_3D_v33_Project_Manager_Eliminacion_Swipe.html" ".\index.html"
+*Settings → Pages → Deploy from a branch → `main` / `(root)`*.
 
-git init
-git add index.html
-git commit -m "feat: project manager deletion and swipe actions"
-git branch -M main
-git remote add origin https://github.com/TU_USUARIO/slotting-3d.git
-git push -u origin main
-```
+## Antes de publicar cambios
 
-## Publicar con GitHub Pages
-
-1. Abrir el repositorio en GitHub.
-2. Entrar en **Settings**.
-3. Entrar en **Pages**.
-4. Elegir **Deploy from a branch**.
-5. Seleccionar la rama `main` y la carpeta `/root`.
-6. Guardar.
-
-## Actualizaciones posteriores
-
-```powershell
-git add index.html
-git commit -m "fix: improve project manager"
-git push
-```
-
-## Antes de hacer público el repositorio
-
-- Verificar que el HTML no contenga productos, ubicaciones, rutas, usuarios ni proyectos reales.
-- Probar el Modo Demo desde una ventana privada.
-- Revisar el archivo con un editor de texto y buscar códigos reales conocidos.
-- Usar repositorio privado mientras se valida la versión pública.
+- No subir exportaciones de SAP/SMART (Storage Bin, Fixed Bin Assignment, Warehouse Task, etc.): quedan fuera por `.gitignore`.
+- Compilar siempre con `--public`.

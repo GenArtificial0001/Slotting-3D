@@ -1,0 +1,13 @@
+# Datos reales de Ford / exportaciones: nunca al repo
+input/
+*.xlsx
+*.xls
+*.csv
+Layout 2027*
+# Documentos internos y credenciales
+CLAUDE.md
+AGENTS.md
+.env
+*.pem
+*.key
+token_cache.json
