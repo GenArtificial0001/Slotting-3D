@@ -8910,8 +8910,8 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
 (() =&gt; {
   'use strict';
   /* v71 - Gemelo 3D: colores por RUTA o por GRUPO DE LINESIDE.
-     Grupo de lineside = el lineside desde el inicio hasta el segundo guion SIN incluirlo (C-FT1-028S → C-FT1,
-     T-IP-001N → T-IP). Con un solo guion se toma lo que va antes (KR16-14 → KR16). Se configura en el drawer de filtros
+     Grupo de lineside = el lineside desde el inicio hasta el segundo guion SIN incluirlo (AB-CD1-028S → AB-CD1,
+     X-YZ-001N → X-YZ). Con un solo guion se toma lo que va antes (AB12-14 → AB12). Se configura en el drawer de filtros
      del layout: selector «Colorear el 3D por», sección «Grupo Lineside» (un color por grupo + ojo para ocultar) y color
      de las piezas compartidas (producto con linesides de más de un grupo). Respeta el resto de reglas de color
      (sin SMART en blanco, bloqueos, ABC, puestos múltiples, stock): solo reemplaza el color de ruta. Se persiste en
@@ -9022,7 +9022,7 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
       f.id = 'colorModeField';
       f.style.marginBottom = '10px';
       f.innerHTML = `&lt;label&gt;Colorear el 3D por&lt;/label&gt;
-        &lt;select id="colorModeSel" class="input"&gt;&lt;option value="route"&gt;Ruta&lt;/option&gt;&lt;option value="lsgroup"&gt;Grupo de Lineside (C-FT1-028S → C-FT1)&lt;/option&gt;&lt;/select&gt;
+        &lt;select id="colorModeSel" class="input"&gt;&lt;option value="route"&gt;Ruta&lt;/option&gt;&lt;option value="lsgroup"&gt;Grupo de Lineside (AB-CD1-028S → AB-CD1)&lt;/option&gt;&lt;/select&gt;
         &lt;label style="margin-top:8px"&gt;Color de piezas compartidas (linesides de más de un grupo)&lt;/label&gt;
         &lt;input id="lsSharedColor" type="color" class="input" style="height:40px;padding:4px"&gt;`;
       ref.parentElement.before(f);

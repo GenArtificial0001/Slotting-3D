@@ -8838,8 +8838,8 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
 (() => {
   'use strict';
   /* v71 - Gemelo 3D: colores por RUTA o por GRUPO DE LINESIDE.
-     Grupo de lineside = el lineside desde el inicio hasta el segundo guion SIN incluirlo (C-FT1-028S → C-FT1,
-     T-IP-001N → T-IP). Con un solo guion se toma lo que va antes (KR16-14 → KR16). Se configura en el drawer de filtros
+     Grupo de lineside = el lineside desde el inicio hasta el segundo guion SIN incluirlo (AB-CD1-028S → AB-CD1,
+     X-YZ-001N → X-YZ). Con un solo guion se toma lo que va antes (AB12-14 → AB12). Se configura en el drawer de filtros
      del layout: selector «Colorear el 3D por», sección «Grupo Lineside» (un color por grupo + ojo para ocultar) y color
      de las piezas compartidas (producto con linesides de más de un grupo). Respeta el resto de reglas de color
      (sin SMART en blanco, bloqueos, ABC, puestos múltiples, stock): solo reemplaza el color de ruta. Se persiste en
@@ -8950,7 +8950,7 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
       f.id = 'colorModeField';
       f.style.marginBottom = '10px';
       f.innerHTML = `<label>Colorear el 3D por</label>
-        <select id="colorModeSel" class="input"><option value="route">Ruta</option><option value="lsgroup">Grupo de Lineside (C-FT1-028S → C-FT1)</option></select>
+        <select id="colorModeSel" class="input"><option value="route">Ruta</option><option value="lsgroup">Grupo de Lineside (AB-CD1-028S → AB-CD1)</option></select>
         <label style="margin-top:8px">Color de piezas compartidas (linesides de más de un grupo)</label>
         <input id="lsSharedColor" type="color" class="input" style="height:40px;padding:4px">`;
       ref.parentElement.before(f);
