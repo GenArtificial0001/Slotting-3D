@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#071225">
 <meta name="slotting-baseline" content="FAVORITA-v14-v18-v19-v20-v21-v22-v23-progress-safe-render">
-<title>Sistema de Slotting 3D Inteligente · v71 · Colores por ruta o grupo de Lineside</title>
+<title>Sistema de Slotting 3D Inteligente · v72 · Paleta fuerte por grupo de Lineside</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300,0,0" rel="stylesheet">
@@ -8200,7 +8200,7 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
        glifos Unicode del sistema.
      - Ya cumplido por la app (v41): guarda de window.define en <head>, restauración al final, sin <script src>,
        un solo HTML, guarda de doble inicio (window.__slotting3dInitialized), sin alert/confirm/prompt nativos. */
-  const BUILD = {version: 'v71', date: '2026-11-05', file: 'Slotting-3D.html'};
+  const BUILD = {version: 'v72', date: '2026-11-05', file: 'Slotting-3D.html'};
   window.__SLOTTING_BUILD = BUILD;
 
   function marker(){
@@ -8866,9 +8866,65 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
     gCache = {n, src: prods, list: [...set].sort()};
     return gCache.list;
   }
+  /* Paleta automática: colores FUERTES y lo más DISTINTOS posible entre sí (muestreo del punto más lejano en CIELAB sobre
+     una grilla de colores saturados), sin parecerse a los colores reservados del 3D (vacía, compartida, obra, sin SMART,
+     puestos múltiples, stock). Los grupos con más ubicaciones con producto reciben primero los colores más separados;
+     el resto sigue el orden de la paleta. Determinista: mismos datos → mismos colores. */
+  const hsl2rgb = (h, s2, l) => {
+    s2 /= 100; l /= 100;
+    const k = n => (n + h / 30) % 12, a = s2 * Math.min(l, 1 - l), f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return [f(0), f(8), f(4)].map(v => Math.round(v * 255));
+  };
+  const hex2rgb = c => { const m = /^#?([0-9a-f]{6})$/i.exec(String(c || '').trim()); if(!m) return null; const n = parseInt(m[1], 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+  const rgb2lab = ([r, g, b]) => {
+    const lin = v => { v /= 255; return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); };
+    const R = lin(r), G = lin(g), B = lin(b);
+    const x = (R * .4124 + G * .3576 + B * .1805) / .95047, y = R * .2126 + G * .7152 + B * .0722, z = (R * .0193 + G * .1192 + B * .9505) / 1.08883;
+    const f = t => t > .008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116;
+    return [116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z))];
+  };
+  const dE = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  let palCache = {key: '', list: []};
+  function palette(){
+    const cfg = State.visualSettings || {};
+    const reserved = ['#596675', CM.shared, '#ff5d73', cfg.emptyColor, cfg.noSmartColor, cfg.multipleColor, State.multiColor, cfg.stockColor, cfg.maintenanceColor, cfg.bothBlockedColor, cfg.stockRemovalColor, cfg.putawayColor, cfg.occupiedNoStockColor, '#ffffff']
+      .map(hex2rgb).filter(Boolean);
+    const key = reserved.map(r => r.join(',')).join('|');
+    if(palCache.key === key) return palCache.list;
+    const cand = [];
+    for(let h = 0; h < 360; h += 5) for(const [sat, l] of [[100, 50], [100, 60], [95, 70], [100, 42]]){
+      const rgb = hsl2rgb(h, sat, l), lab = rgb2lab(rgb);
+      if(lab[0] >= 45) cand.push({rgb, lab});   // sin colores demasiado oscuros sobre el fondo del 3D (p. ej. azul puro)
+    }
+    const chosen = reserved.map(rgb2lab), out = [];
+    const minD = new Array(cand.length).fill(Infinity);
+    cand.forEach((c, i) => { for(const x of chosen) minD[i] = Math.min(minD[i], dE(c.lab, x)); });
+    for(let n = 0; n < 140 && n < cand.length; n++){
+      let best = -1, bd = -1;
+      for(let i = 0; i < cand.length; i++) if(minD[i] > bd){ bd = minD[i]; best = i; }
+      if(best < 0) break;
+      const c = cand[best];
+      out.push('#' + c.rgb.map(v => v.toString(16).padStart(2, '0')).join(''));
+      cand.forEach((cc, i) => { minD[i] = Math.min(minD[i], dE(cc.lab, c.lab)); });
+      minD[best] = -1;
+    }
+    palCache = {key, list: out};
+    return out;
+  }
+  // Orden de reparto: más ubicaciones con producto primero (desempate alfabético).
+  let rkCache = {bins: null, n: -1, map: new Map()};
+  function rankMap(){
+    const bins = State.bins || [];
+    if(rkCache.bins === bins && rkCache.n === bins.length) return rkCache.map;
+    const cnt = new Map(allGroups().map(g => [g, 0]));
+    for(const b of bins){ if(!b.product) continue; for(const g of groupsOfList(b.linesides)) cnt.set(g, (cnt.get(g) || 0) + 1); }
+    const order = [...cnt].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(x => x[0]);
+    rkCache = {bins, n: bins.length, map: new Map(order.map((g, i) => [g, i]))};
+    return rkCache.map;
+  }
   const autoColor = g => {
-    const i = Math.max(0, allGroups().indexOf(g));
-    return `hsl(${Math.round((i * 137.508) % 360)} 72% ${[52, 42, 62][i % 3]}%)`;
+    const pal = palette(), i = rankMap().get(g);
+    return pal[(i ?? 0) % Math.max(1, pal.length)] || '#7f8b98';
   };
   const colorOf = g => CM.colors[g] || autoColor(g);
 
@@ -9008,7 +9064,7 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
     return r;
   };
 
-  window.__ColorMode = {state: CM, lsGroup, groupsOfList, colorOf, allGroups, refresh: refreshScene3d};
+  window.__ColorMode = {state: CM, lsGroup, groupsOfList, colorOf, allGroups, palette, rankMap, refresh: refreshScene3d};
   function bindV71(){
     try{ ensureDom(); if(CM.mode === 'lsgroup') refreshScene3d(); }catch(e){ console.warn('v71:', e); }
   }
