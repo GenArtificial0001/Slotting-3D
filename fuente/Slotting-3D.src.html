@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#071225">
 <meta name="slotting-baseline" content="FAVORITA-v14-v18-v19-v20-v21-v22-v23-progress-safe-render">
-<title>Sistema de Slotting 3D Inteligente · v63 · Picking enfocado en el plano 2D</title>
+<title>Sistema de Slotting 3D Inteligente · v64 · Demo con Picking precargado</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300,0,0" rel="stylesheet">
@@ -8005,7 +8005,7 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
        glifos Unicode del sistema.
      - Ya cumplido por la app (v41): guarda de window.define en <head>, restauración al final, sin <script src>,
        un solo HTML, guarda de doble inicio (window.__slotting3dInitialized), sin alert/confirm/prompt nativos. */
-  const BUILD = {version: 'v63', date: '2026-11-05', file: 'Slotting-3D.html'};
+  const BUILD = {version: 'v64', date: '2026-11-05', file: 'Slotting-3D.html'};
   window.__SLOTTING_BUILD = BUILD;
 
   function marker(){
@@ -8428,6 +8428,14 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
   .rec-par .rec-stage{height:520px !important}
   .rec-par .rec-stage.big{height:82vh !important}
   #recParBtn.on{background:#1b7f4b;border-color:#3be28a;color:#fff}
+  /* Celular: planos más bajos y controles más chicos */
+  @media (max-width: 700px){
+    .rec-stage{height:380px !important}
+    .rec-par .rec-stage{height:340px !important}
+    .rec-zoom{top:6px;right:6px;gap:4px}
+    .rec-zoom button{min-width:30px;height:28px;padding:0 7px;font-size:12px}
+    .rec-zoom-hint{display:none}
+  }
 </style>
 <script id="v62-lado-a-lado">
 (() => {
@@ -8576,6 +8584,162 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
   };
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(bindV63, 1600), {once: true});
   else setTimeout(bindV63, 1600);
+})();
+</script>
+<script id="v64-demo-picking">
+(() => {
+  'use strict';
+  /* v64 - El Modo Demo trae Picking precargado (todo ficticio).
+     Pensado para probar desde el celular, donde no se pueden cargar los Excel. Al activar Demo se generan, de forma
+     determinista (misma semilla = mismos datos), 28 Warehouse Orders ZP38 del día de hoy con 4 pickers, 3 Routes y
+     9-15 picks por orden sobre los puestos fijos del layout de demostración, más un "Fixed Bin Assignment Futuro"
+     de ejemplo (dentro de cada Route los productos de más consumo pasan a las primeras ubicaciones, contiguos y con
+     una libre entre productos). Entran por los mismos caminos que un Excel (applySource 'tasks' y 'fixedFuture'), así
+     que Picking, Recorrido, "Lado a lado", Simulador 3D y la Vista Futura funcionan igual. Al salir de Demo se
+     restaura el Picking y el futuro reales. Nada de esto toca datos de Ford. */
+  if(typeof setDemoMode !== 'function' || typeof applySource !== 'function' || !window.__Picking || !window.__Futuro) return;
+  const PK = window.__Picking, FUT = window.__Futuro;
+
+  function rng(seed){ let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+  const pad = n => String(n).padStart(2, '0');
+  const hms = sec => `${pad(Math.floor(sec / 3600) % 24)}:${pad(Math.floor(sec / 60) % 60)}:${pad(Math.floor(sec) % 60)}`;
+  const serialToday = () => { const d = new Date(); return Math.floor((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - Date.UTC(1899, 11, 30)) / 86400000); };
+
+  /* ---------- Warehouse Tasks ficticias ---------- */
+  function demoTaskRows(){
+    const rand = rng(20261106), serial = serialToday();
+    const byRoute = {};
+    for(const p of Object.values(State.products || {})) if((p.fixedBins || []).length) (byRoute[p.route] ||= []).push(p);
+    const routes = Object.keys(byRoute).sort();
+    if(!routes.length) return [];
+    const seqOf = p => State.pickSequenceMap?.[p.fixedBins[0]] ?? 0;
+    const pickers = ['PICKER01', 'PICKER02', 'PICKER03', 'PICKER04'];
+    const rows = [];
+    let taskId = 0;
+    const ORDERS = 28;
+    for(let i = 0; i < ORDERS; i++){
+      const route = routes[i % routes.length], picker = pickers[i % pickers.length];
+      const list = byRoute[route];
+      const n = Math.min(list.length, 9 + Math.floor(rand() * 7));
+      // productos al azar ponderados por consumo (los de más consumo se piden más seguido)
+      const pool = list.map(p => ({p, w: p.dailyUsage || 100}));
+      const chosen = [];
+      while(chosen.length < n && pool.length){
+        const total = pool.reduce((s, x) => s + x.w, 0);
+        let r = rand() * total, k = 0;
+        for(; k < pool.length - 1; k++){ r -= pool[k].w; if(r <= 0) break; }
+        chosen.push(pool.splice(k, 1)[0].p);
+      }
+      // orden de picking: por secuencia pero con retrocesos (el picker no siempre sigue la secuencia)
+      chosen.sort((a, b) => seqOf(a) - seqOf(b));
+      for(let s = 0; s < Math.floor(n * 0.6); s++){
+        const a = Math.floor(rand() * n), b = Math.min(n - 1, Math.max(0, a + Math.floor(rand() * 7) - 3));
+        [chosen[a], chosen[b]] = [chosen[b], chosen[a]];
+      }
+      const order = String(9900000 + 1000 + i), wave = String(530000 + Math.floor(i / 4));
+      let t = 6 * 3600 + 600 + Math.floor(i * (15.5 * 3600 / ORDERS)) + Math.floor(rand() * 240);
+      const created = t - 1800;
+      for(const p of chosen){
+        const bin = p.fixedBins[Math.floor(rand() * p.fixedBins.length)];
+        const qty = 6 + Math.floor(rand() * 43), dur = 38 + Math.floor(rand() * 70);
+        const start = t, end = t + dur;
+        rows.push({
+          'Whse Process Type': 'ZP38', 'Warehouse Task': String(80000000 + (++taskId)), 'Activity': 'PICK', 'Warehouse Task Status': 'C',
+          'Warehouse Order': order, 'Wave': wave, 'Route': route, 'Supply Area': p.lineside, 'Product': p.product,
+          'Source Storage Bin': bin, 'Source Storage Type': 'CVPZ', 'Src Trgt Qty BUoM': qty, 'Act Dest Qty Alt UoM': qty,
+          'Confirmed By': picker, 'Original Dest. Bin': 'DEMO-CARRO', 'Exception Code': '',
+          'Start Date': serial, 'Start Time': hms(start), 'Confirmation Date': serial, 'Confirmation Time': hms(end),
+          'Created On': serial, 'Created At': hms(created)
+        });
+        t = end;
+      }
+    }
+    return rows;
+  }
+
+  /* ---------- Fixed Bin Assignment Futuro de ejemplo ---------- */
+  function demoFutureRows(){
+    const seq = State.pickSequenceMap || {};
+    const rows = [];
+    const byRoute = {};
+    for(const p of Object.values(State.products || {})) if((p.fixedBins || []).length) (byRoute[p.route] ||= []).push(p);
+    const slots = bin => Number(seq[bin] ?? 1e9);
+    for(const [route, list] of Object.entries(byRoute)){
+      // bins de nivel 01 de los pasillos de esta Route, en orden de Picking Sequence
+      const aisles = new Set(list.map(p => State.bins.find(b => b.bin === p.fixedBins[0])?.aisle));
+      const bins = State.bins.filter(b => aisles.has(b.aisle) && b.level === '01').sort((a, b) => slots(a.bin) - slots(b.bin));
+      const used = new Set();
+      const sorted = [...list].sort((a, b) => (b.dailyUsage || 0) - (a.dailyUsage || 0));
+      for(const p of sorted){
+        const n = p.fixedBins.length;
+        let at = -1;
+        for(let k = 0; k + n <= bins.length; k++){
+          const run = bins.slice(k, k + n);
+          if(run.some(b => used.has(b.bin))) continue;
+          if(new Set(run.map(b => b.aisle + b.group)).size > 1) continue;
+          at = k; break;
+        }
+        if(at < 0) at = -1;
+        const target = at >= 0 ? bins.slice(at, at + n).map(b => b.bin) : p.fixedBins;
+        target.forEach(b => used.add(b));
+        if(at >= 0 && bins[at + n]) used.add(bins[at + n].bin);   // una libre entre productos
+        for(const b of target) rows.push({'Product': p.product, 'Storage Bin': b, 'Storage Type': 'CVPZ', 'Product Description': p.description});
+      }
+    }
+    return rows;
+  }
+
+  /* ---------- Carga / restauración ---------- */
+  let backup = null;
+  const snapshot = () => ({pk: {...PK}, fut: {...FUT}, futRows: State.sources?.fixedFuture});
+
+  function loadDemoPicking(){
+    try{
+      if(!backup) backup = snapshot();
+      const tasks = demoTaskRows(), fut = demoFutureRows();
+      if(!tasks.length) return;
+      State.sources = State.sources || {};
+      applySource('fixedFuture', fut);
+      applySource('tasks', tasks);
+      try{ FUT.invalidate?.(); }catch(e){}
+      try{ postDataChange(); }catch(e){ console.warn('v64: postDataChange', e); }
+      try{ window.__Recorrido?.refresh?.(); }catch(e){}
+      try{ renderSources(); }catch(e){}
+    }catch(e){ console.warn('v64: no se pudo cargar el Picking de demo', e); }
+  }
+
+  function restoreReal(){
+    if(!backup) return;
+    try{
+      Object.assign(PK, backup.pk);
+      Object.assign(FUT, backup.fut);
+      if(backup.futRows) State.sources.fixedFuture = backup.futRows;
+      FUT.invalidate?.();
+      backup = null;
+      try{ postDataChange(); }catch(e){}
+      try{ window.__Recorrido?.refresh?.(); }catch(e){}
+    }catch(e){ console.warn('v64: no se pudo restaurar el Picking real', e); }
+  }
+
+  const baseSetDemoModeV64 = setDemoMode;
+  setDemoMode = async function(enabled){
+    const wasDemo = State.demoMode;
+    if(enabled && !wasDemo && !backup) backup = snapshot();   // antes de que la demo reemplace nada
+    const r = await baseSetDemoModeV64.apply(this, arguments);
+    if(State.demoMode && !wasDemo) loadDemoPicking();
+    else if(!State.demoMode && wasDemo) restoreReal();
+    else if(!State.demoMode && backup && !wasDemo) backup = null;   // se canceló el diálogo
+    return r;
+  };
+
+  // Versión pública (sin datos): se avisa cómo probarla.
+  function hint(){
+    try{
+      if(!State.demoMode && !State.bins.length) toast('No hay datos cargados: activá el Modo Demo (interruptor de arriba) para probar con datos ficticios, incluido el Picking.', 'ok', 9000);
+    }catch(e){}
+  }
+  window.__DemoPicking = {load: loadDemoPicking, restore: restoreReal, taskRows: demoTaskRows, futureRows: demoFutureRows};
+  setTimeout(hint, 2600);
 })();
 </script>
 </body></html>
