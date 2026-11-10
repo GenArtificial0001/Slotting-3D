@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#071225">
 <meta name="slotting-baseline" content="FAVORITA-v14-v18-v19-v20-v21-v22-v23-progress-safe-render">
-<title>Sistema de Slotting 3D Inteligente · v72 · Paleta fuerte por grupo de Lineside</title>
+<title>Sistema de Slotting 3D Inteligente · v73 · Órdenes encadenadas y panel ensanchable</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300,0,0" rel="stylesheet">
@@ -6813,6 +6813,7 @@ body.in-sharepoint .inicio-grid{min-height:calc(var(--sp-app-height,78dvh) - 152
   const MAX_TRACKS = 12, FLOOR = 0.06, DT = 0.4, MAXSTEPS = 30000;
   const S = {open: false, svg: null, panel: null, clock: null, tracks: [], t: 0, t0: 0, t1: 1, playing: false, last: 0, raf: 0, speed: 16, nextId: 1, walk: 1.4,
     f: {pickers: new Set(), orders: new Set(), h0: 0, h1: 23, date: null}, head: {}, cache: new Map(), cacheKey: '', exp: new Set(), expAuto: true, hidden: false, ordersMemo: null, sim: null, simKey: ''};
+  try{ S.chain = localStorage.getItem('slottingSimChainV73') === '1'; }catch(e){ S.chain = false; }   // v73: encadenar las órdenes de cada picker
   const fmt = RC.fmt, hms = RC.hms, clockOf = RC.clockOf, dateOf = RC.dateOf;
   const esc3 = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
   const scaleF = () => FUT?.scale || 1;
@@ -6933,7 +6934,19 @@ body.in-sharepoint .inicio-grid{min-height:calc(var(--sp-app-height,78dvh) - 152
      Es determinista y no tiene bloqueos mutuos. Los descansos congelan a todos (eje de tiempo "trabajado"). */
   function runSim(){
     const sc = scaleF(), D = AMd.disp, breaks = parseBreaks();
-    const tracks = S.tracks.filter(t => pathOf(t) && (t.o || byId(t.order)));
+    // v73: con «Encadenar», cada pista pasa a ser la secuencia de TODAS las órdenes que ese picker hizo ese día (desde la orden
+    // base en adelante); cada orden es un agente propio con su hora de salida real. Las pistas de la tarjeta de Recorrido (t.o)
+    // nunca se encadenan.
+    const base0 = S.tracks.filter(t => pathOf(t) && (t.o || byId(t.order)));
+    const tracks = [];
+    for(const t of base0){
+      const o0 = !t.o && S.chain ? byId(t.base ?? t.order) : null;
+      if(o0){
+        const ids = allOrders().filter(o => o.picker === o0.picker && o.date === o0.date && o.startTs >= o0.startTs).sort((a, b) => a.startTs - b.startTs).map(o => o.id);
+        t.segs = ids.map((oid, k) => ({id: t.id * 1000 + k, order: oid, scenario: t.scenario, slot: t.slot, color: t.color, parent: t, k}));
+        tracks.push(...t.segs);
+      }else{ t.segs = null; tracks.push(t); }
+    }
     if(!tracks.length) return null;
     /* Tiempo real del proceso (v66). La hora de SALIDA de cada orden no es la de la primera línea: se calcula hacia atrás
        desde la primera confirmación real, restándole todo lo que el picker hace antes de confirmarla:
@@ -7028,6 +7041,27 @@ body.in-sharepoint .inicio-grid{min-height:calc(var(--sp-app-height,78dvh) - 152
       a.L = l;
       return a;
     });
+    // Encadenado (v73): la orden siguiente sale respetando la pausa REAL entre una y otra
+    //   pausa = salida real de la siguiente − (última confirmación de la anterior + regreso al despacho).
+    // ACTUAL: sale a su hora real (no antes de terminar la anterior); FUTURO / por secuencia: sale cuando termina la anterior
+    // en ese escenario + la misma pausa (así el picker que termina antes empieza antes la siguiente).
+    if(S.chain){
+      const byParent = new Map();
+      for(const a of ag){ const par = a.trk.parent; if(par) (byParent.get(par) || byParent.set(par, []).get(par)).push(a); }
+      for(const list of byParent.values()){
+        list.sort((x, y) => x.trk.k - y.trk.k);
+        let prev = null;
+        for(const a of list){
+          const dd = dataFor(a.trk), od = dd.order, pl = realPlan(a.trk, dd, od);
+          a.chainInfo = pl ? {depart: pl.depart, last: od.tasks[od.tasks.length - 1].ts, back: (pl.act.endLeg || 0) / pl.v} : null;
+          if(prev && a.chainInfo && prev.chainInfo){
+            const prevEnd = prev.start + prev.L * DT, pause = Math.max(0, a.chainInfo.depart - (prev.chainInfo.last + prev.chainInfo.back));
+            a.start = a.key === 'actual' ? Math.max(a.chainInfo.depart, prevEnd) : prevEnd + pause;
+          }
+          prev = a;
+        }
+      }
+    }
     // 2) eje de tiempo: pasos de reloj ↔ pasos trabajados (los descansos no avanzan el trabajo)
     const T0 = Math.min(...ag.map(a => a.start));
     const maxStartIdx = Math.ceil((Math.max(...ag.map(a => a.start)) - T0) / DT) + 2, pre = [0];
@@ -7088,14 +7122,35 @@ body.in-sharepoint .inicio-grid{min-height:calc(var(--sp-app-height,78dvh) - 152
 
   function ensureSim(){
     ensureCache();
-    const sig = S.tracks.map(t => `${t.id}:${t.order}:${t.slot}:${t.scenario}`).join('|') + `|${S.cacheKey}|${S.walk}`;
+    const sig = S.tracks.map(t => `${t.id}:${S.chain ? (t.base ?? t.order) : t.order}:${t.slot}:${t.scenario}`).join('|') + `|${S.cacheKey}|${S.walk}|c${S.chain ? 1 : 0}`;
     if(S.sim && S.simKey === sig) return S.sim;
     S.simKey = sig; S.sim = runSim();
     if(S.sim){ S.t0 = S.sim.T0; S.t1 = S.sim.T1; S.t = Math.min(Math.max(S.t, S.t0), S.t1); }
     return S.sim;
   }
+  // v73: con «Encadenar», la orden activa de cada pista es la última que ya salió según el reloj; el selector de orden (.trkO)
+  // cambia solo cuando llega la hora de la siguiente (sin recalcular la simulación).
+  function syncChain(){
+    let changed = false;
+    for(const t of S.tracks){
+      if(!t.segs || !S.chain || !S.sim){ t._seg = null; continue; }
+      let k = 0;
+      for(let i = 0; i < t.segs.length; i++){ const r = S.sim.ag.get(t.segs[i].id); if(r && S.t >= r.start) k = i; }
+      t._seg = t.segs[k];
+      if(t.order !== t._seg.order){
+        t.order = t._seg.order; changed = true;
+        const sel = S.panel?.querySelector(`.trk[data-id="${t.id}"] .trkO`);
+        if(sel){
+          if(![...sel.options].some(o => o.value === t.order)) sel.add(new Option(`${t.order} · ${clockOf(byId(t.order)?.startTs ?? 0).slice(0, 5)}`, t.order));
+          sel.value = t.order;
+        }
+      }
+    }
+    return changed;
+  }
   function trkState(trk){
-    const sim = S.sim, r = sim?.ag.get(trk.id);
+    const sg = trk.segs ? (trk._seg || trk.segs[0]) : trk;
+    const sim = S.sim, r = sim?.ag.get(sg.id);
     if(!r || !r.dist.length) return null;
     const i = Math.max(0, Math.min(r.dist.length - 1, Math.floor((S.t - sim.T0) / DT)));
     return {r, dm: r.dist[i], st: r.st[i]};
@@ -7237,6 +7292,7 @@ body.in-sharepoint .inicio-grid{min-height:calc(var(--sp-app-height,78dvh) - 152
     ensureCache();
     if(S.recompute){ S.recompute = false; S.sim = null; }
     ensureSim();
+    syncChain();
     const r = Renderer.canvas.getBoundingClientRect();
     S.svg.setAttribute('viewBox', `0 0 ${r.width} ${r.height}`);
     let html = '';
@@ -7375,6 +7431,7 @@ body.in-sharepoint .inicio-grid{min-height:calc(var(--sp-app-height,78dvh) - 152
         <div class="sim-row"><label style="flex:1">Hora de inicio de la orden: ${hourLabel}
           <div class="hr">Desde <input class="input" type="number" min="0" max="23" id="simH0" value="${S.f.h0}"> h &nbsp;hasta <input class="input" type="number" min="0" max="23" id="simH1" value="${S.f.h1}"> h <span class="muted">(incluye hasta ${String(S.f.h1).padStart(2, '0')}:59:59)</span></div></label></div>
         <div class="sim-row"><button class="btn" id="simAdd">＋ Agregar picker</button><button class="btn" id="simAddAll">＋ Todas (${Math.min(cands.length, MAX_TRACKS)})</button><button class="btn" id="simClear">Quitar todos</button><span class="muted">${cands.length} órdenes con estos filtros</span></div>
+        <div class="sim-row"><label style="display:flex;gap:6px;align-items:flex-start" title="Cuando un picker termina una Warehouse Order sigue con la siguiente que hizo ese día, respetando la pausa real entre una y otra, hasta terminar todas sus tareas. El selector de orden cambia solo."><input type="checkbox" id="simChain" ${S.chain ? 'checked' : ''}> <span>Encadenar las órdenes de cada picker: cuando termina una continúa con la siguiente (respeta las pausas) y el selector de orden cambia solo</span></label></div>
         <div class="sim-sec" style="display:flex;justify-content:space-between;align-items:center"><span>Pickers en pantalla (${S.tracks.length})</span><span><button class="btn small" id="simExpAll">Expandir todo</button> <button class="btn small" id="simColAll">Contraer todo</button></span></div>
         <div id="simTracks">${S.tracks.map(trk => {
           const o = byId(trk.order), ownPicker = o?.picker;
@@ -7429,11 +7486,20 @@ body.in-sharepoint .inicio-grid{min-height:calc(var(--sp-app-height,78dvh) - 152
     $('simClear').addEventListener('click', () => { stop(); S.tracks = []; S.sim = null; afterTracksChanged(false); });
     P.querySelectorAll('.trk').forEach(el => {
       const trk = S.tracks.find(t => t.id === Number(el.dataset.id));
-      el.querySelector('.trkP').addEventListener('change', e => { const first = allOrders().find(o => o.picker === e.target.value && hourOnly(o) && orderPass(o)) || allOrders().find(o => o.picker === e.target.value); if(first){ stop(); trk.order = first.id; afterTracksChanged(true); } });
-      el.querySelector('.trkO').addEventListener('change', e => { stop(); trk.order = e.target.value; afterTracksChanged(true); });
+      el.querySelector('.trkP').addEventListener('change', e => { const first = allOrders().find(o => o.picker === e.target.value && hourOnly(o) && orderPass(o)) || allOrders().find(o => o.picker === e.target.value); if(first){ stop(); trk.order = first.id; trk.base = first.id; afterTracksChanged(true); } });
+      el.querySelector('.trkO').addEventListener('change', e => { stop(); trk.order = e.target.value; trk.base = trk.order; afterTracksChanged(true); });
       el.querySelector('.trkS').addEventListener('change', e => { stop(); trk.scenario = e.target.value; afterTracksChanged(false); });
       el.querySelector('.trkMore').addEventListener('click', () => { S.expAuto = false; S.exp.has(trk.id) ? S.exp.delete(trk.id) : S.exp.add(trk.id); renderPanel(); });
       el.querySelector('.trkDel').addEventListener('click', () => { stop(); S.tracks = S.tracks.filter(t => t !== trk); S.exp.delete(trk.id); afterTracksChanged(false); });
+    });
+    $('simChain').addEventListener('change', e => {
+      stop(); S.chain = e.target.checked;
+      try{ localStorage.setItem('slottingSimChainV73', S.chain ? '1' : '0'); }catch(err){}
+      for(const t of S.tracks){
+        if(S.chain) t.base = t.order;
+        else{ t.order = t.base ?? t.order; t.base = null; t.segs = null; t._seg = null; }
+      }
+      S.sim = null; afterTracksChanged(false);
     });
     $('simPlay').addEventListener('click', () => S.playing ? stop() : play());
     $('simReset').addEventListener('click', () => { stop(); S.t = S.t0; draw(); });
@@ -8200,7 +8266,7 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
        glifos Unicode del sistema.
      - Ya cumplido por la app (v41): guarda de window.define en <head>, restauración al final, sin <script src>,
        un solo HTML, guarda de doble inicio (window.__slotting3dInitialized), sin alert/confirm/prompt nativos. */
-  const BUILD = {version: 'v72', date: '2026-11-05', file: 'Slotting-3D.html'};
+  const BUILD = {version: 'v73', date: '2026-11-05', file: 'Slotting-3D.html'};
   window.__SLOTTING_BUILD = BUILD;
 
   function marker(){
@@ -9070,6 +9136,63 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
   }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(bindV71, 900), {once: true});
   else setTimeout(bindV71, 900);
+})();
+</script>
+<style id="v73-sim-panel-css">
+  #sim-panel{min-width:300px;max-width:calc(100% - 24px)}
+  #sim-resizer{position:absolute;z-index:23;width:12px;cursor:ew-resize;display:none;touch-action:none}
+  #sim-resizer::after{content:'';position:absolute;top:50%;left:4px;width:4px;height:44px;margin-top:-22px;border-radius:3px;background:rgba(120,180,220,.55)}
+  #sim-resizer:hover::after,#sim-resizer.drag::after{background:#3be28a}
+</style>
+<script id="v73-sim-panel-resize">
+(() => {
+  'use strict';
+  /* v73 - El panel del Simulador 3D (#sim-panel) se ensancha arrastrando su borde derecho con el mouse (o el dedo).
+     El ancho se recuerda en slottingSimWidthV73. */
+  const KEY = 'slottingSimWidthV73';
+  let handle = null, panel = null, ro = null;
+  const clamp = w => Math.max(300, Math.min(w, (panel?.parentElement?.clientWidth || 1200) - 24));
+  function place(){
+    if(!panel || !handle) return;
+    const show = getComputedStyle(panel).display !== 'none';
+    handle.style.display = show ? 'block' : 'none';
+    if(!show) return;
+    handle.style.top = panel.offsetTop + 'px';
+    handle.style.height = panel.offsetHeight + 'px';
+    handle.style.left = (panel.offsetLeft + panel.offsetWidth - 6) + 'px';
+  }
+  function setup(){
+    const p = document.getElementById('sim-panel');
+    if(!p || p === panel) return;
+    panel = p;
+    try{ const w = Number(localStorage.getItem(KEY)); if(w > 0) panel.style.width = clamp(w) + 'px'; }catch(e){}
+    handle = document.createElement('div');
+    handle.id = 'sim-resizer';
+    handle.title = 'Arrastrá para ensanchar el panel';
+    panel.parentElement.appendChild(handle);
+    handle.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      handle.classList.add('drag');
+      try{ handle.setPointerCapture(e.pointerId); }catch(err){}
+      const x0 = e.clientX, w0 = panel.offsetWidth;
+      const move = ev => { panel.style.width = clamp(w0 + ev.clientX - x0) + 'px'; place(); };
+      const up = () => {
+        handle.classList.remove('drag');
+        handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up);
+        try{ localStorage.setItem(KEY, String(panel.offsetWidth)); }catch(err){}
+      };
+      handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
+    });
+    try{ ro = new ResizeObserver(place); ro.observe(panel); }catch(e){}
+    new MutationObserver(place).observe(panel, {attributes: true, attributeFilter: ['style', 'class']});
+    window.addEventListener('resize', place);
+    place();
+  }
+  let tmr = 0;
+  const watch = () => { if(tmr) return; tmr = setTimeout(() => { tmr = 0; try{ setup(); place(); }catch(e){} }, 250); };
+  new MutationObserver(watch).observe(document.body, {childList: true, subtree: true});
+  setTimeout(watch, 1500);
+  window.__SimPanelResize = {place};
 })();
 </script>
 </body></html>
