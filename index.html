@@ -8,7 +8,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#071225">
 <meta name="slotting-baseline" content="FAVORITA-v14-v18-v19-v20-v21-v22-v23-progress-safe-render">
-<title>Sistema de Slotting 3D Inteligente · v77 · Logo de marca oculto con el menú achicado</title>
+<title>Sistema de Slotting 3D Inteligente · v77 · Zona de compartidas y logo de marca</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300,0,0" rel="stylesheet">
@@ -1285,6 +1285,14 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
     .sidebar.mobile-open.collapsed .brand-mark{display:block !important}
   }
 </style>
+<style id="v77-compartidas-css">
+  #btnToggleShared{width:34px!important;min-width:34px!important;max-width:34px!important;padding:0!important;font-weight:800}
+  #btnToggleShared .button-text{display:none!important}
+  #btnToggleShared .sh-glyph{font-size:15px;line-height:1}
+  #btnToggleShared.active{outline:2px solid var(--sh-color,#ff2fd0);outline-offset:-2px}
+  #sharedColor{width:22px;height:30px;padding:0;margin:0 2px;border:1px solid rgba(255,255,255,.4);border-radius:6px;background:none;cursor:pointer;vertical-align:middle}
+</style>
+
 <textarea id="slotting-sp-code" style="display:none" aria-hidden="true" tabindex="-1">
 /* Slotting 3D · compilación para SharePoint (todos los bloques en un solo ámbito) */
 (function(){
@@ -5980,11 +5988,14 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
        3) Se rellena desde el pasillo de inicio (K4) hacia atrás, stack ascendente; por Route se agrupa por
           Lineside, ordenado por Pick Sort Sequence, dejando N ubicaciones libres entre linesides.
        4) Un producto con varios puestos fijos ocupa esa misma cantidad de ubicaciones seguidas en un pasillo.
+       5) (v77) Zona de compartidas: los productos con MÁS DE UN Lineside (p.linesides) se agrupan en un bloque de
+          pasillos en el MEDIO de la zona (arranca al inicio de un pasillo y ocupa solo lo necesario), ordenados por Route y Pick Sort Sequence, sin libres entre linesides (los suyos son varios);
+          el resto se rellena desde K4 y salta ese bloque. El Picking Sequence los visita al pasar por el medio.
      Un archivo futuro importado a mano tiene prioridad hasta pulsar "Regenerar". */
   if(typeof applySource !== 'function' || typeof State === 'undefined' || !window.__Futuro || typeof handleSourceFile !== 'function') return;
 
   const FUT = window.__Futuro, CFG_KEY = 'slottingFuturoV46', ALIAS = 'Fixed Bin Assignment Futuro';
-  const CFG = {order: ['NRC', 'NRT', 'NRK', 'NPP', 'NRD'], keep: ['LAD', 'FMC'], exclude: ['KIT', 'LAL'], gap: 2, start: 'K4', zone: 'CVPZ', auto: true};
+  const CFG = {order: ['NRC', 'NRT', 'NRK', 'NPP', 'NRD'], keep: ['LAD', 'FMC'], exclude: ['KIT', 'LAL'], gap: 2, start: 'K4', zone: 'CVPZ', auto: true, shared: true};
   try{ Object.assign(CFG, JSON.parse(localStorage.getItem(CFG_KEY) || '{}')); }catch(e){}
   // Migración: el orden anterior (NRD antes que NPP) pasa al vigente: NPP antes que NRD.
   if(Array.isArray(CFG.order) &amp;&amp; CFG.order.join(',') === 'NRC,NRT,NRK,NRD,NPP') CFG.order = ['NRC', 'NRT', 'NRK', 'NPP', 'NRD'];
@@ -6025,31 +6036,61 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
       .sort((a, b) =&gt; aisleCompare(b.aisle, a.aisle) || groupOrder(a.group) - groupOrder(b.group) || stackOrder(a) - stackOrder(b));
     const startIdx = cfg.start ? bins.findIndex(b =&gt; b.aisle === cfg.start) : 0;
     if(startIdx &gt; 0) bins = bins.slice(startIdx);
-    const groups = [];
-    for(const r of cfg.order){
-      const map = {};
-      for(const x of moving.filter(x =&gt; x.route === r)) (map[x.line] ??= {route: r, line: x.line, seq: x.seq, items: []}).items.push(x);
-      groups.push(...Object.values(map).sort((a, b) =&gt; a.seq - b.seq || a.line.localeCompare(b.line)));
-    }
-    const free = k =&gt; bins[k] &amp;&amp; !reserved.has(bins[k].bin);
-    const assign = [], unplaced = [];
-    let i = 0, first = true, wasted = 0;
-    for(const g of groups){
-      if(!first){ let c = 0; while(c &lt; cfg.gap &amp;&amp; i &lt; bins.length){ if(free(i)) c++; i++; } }
-      first = false;
-      g.items.sort((a, b) =&gt; a.p.product.localeCompare(b.p.product));
-      for(const x of g.items){
-        const n = x.old.length;
-        const fits = k =&gt; { for(let j = 0; j &lt; n; j++){ if(!free(k + j) || bins[k + j].aisle !== bins[k].aisle) return false; } return true; };
-        let k = i;
-        while(k &lt; bins.length &amp;&amp; !fits(k)) k++;
-        if(k &gt;= bins.length){ unplaced.push(x); continue; }
-        wasted += k - i;
-        assign.push({x, bins: bins.slice(k, k + n).map(b =&gt; b.bin)});
-        i = k + n;
+    const isShared = x =&gt; (x.p.linesides || []).filter(Boolean).length &gt; 1;
+    const sharedItems = cfg.shared === false ? [] : moving.filter(isShared);
+    const sharedSet = new Set(sharedItems);
+    const mkGroups = list =&gt; {
+      const out = [];
+      for(const r of cfg.order){
+        const map = {};
+        for(const x of list.filter(x =&gt; x.route === r)) (map[x.line] ??= {route: r, line: x.line, seq: x.seq, items: []}).items.push(x);
+        out.push(...Object.values(map).sort((a, b) =&gt; a.seq - b.seq || a.line.localeCompare(b.line)));
       }
+      return out;
+    };
+    const normalGroups = mkGroups(moving.filter(x =&gt; !sharedSet.has(x)));
+    const sharedGroups = mkGroups(sharedItems);
+    const groups = [...sharedGroups, ...normalGroups];
+    // Zona de compartidas: bloque contiguo en el MEDIO de la zona, alineado a pasillos completos.
+    let zoneBins = [], restBins = bins;
+    if(sharedItems.length){
+      const need = sharedItems.reduce((s2, x) =&gt; s2 + x.old.length, 0);   // la zona es un pool compacto: sin libres entre linesides
+      const size = Math.ceil(need * 1.04) + 2;
+      let zs = Math.max(0, Math.floor(bins.length / 2) - Math.floor(size / 2));
+      while(zs &gt; 0 &amp;&amp; bins[zs - 1].aisle === bins[zs].aisle) zs--;   // arranca en el inicio de un pasillo
+      const ze = Math.min(bins.length, zs + size);
+      zoneBins = bins.slice(zs, ze);
+      restBins = [...bins.slice(0, zs), ...bins.slice(ze)];
     }
-    return {assign, unplaced, removed, stay, groups, wasted, endsAt: bins[Math.min(i, bins.length - 1)]?.bin || '', capacity: bins.length};
+    const assign = [], unplaced = [];
+    let wasted = 0, lastBin = '';
+    const place = (grps, arr, gap) =&gt; {
+      const free = k =&gt; arr[k] &amp;&amp; !reserved.has(arr[k].bin);
+      let i = 0, first = true;
+      for(const g of grps){
+        if(!first){ let c = 0; while(c &lt; gap &amp;&amp; i &lt; arr.length){ if(free(i)) c++; i++; } }
+        first = false;
+        g.items.sort((a, b) =&gt; a.p.product.localeCompare(b.p.product));
+        for(const x of g.items){
+          const n = x.old.length;
+          const fits = k =&gt; { for(let j = 0; j &lt; n; j++){ if(!free(k + j) || arr[k + j].aisle !== arr[k].aisle) return false; } return true; };
+          let k = i;
+          while(k &lt; arr.length &amp;&amp; !fits(k)) k++;
+          if(k &gt;= arr.length){ unplaced.push(x); continue; }
+          wasted += k - i;
+          assign.push({x, bins: arr.slice(k, k + n).map(b =&gt; b.bin)});
+          i = k + n;
+        }
+      }
+      return arr[Math.min(i, arr.length - 1)]?.bin || '';
+    };
+    if(sharedGroups.length) place(sharedGroups, zoneBins, 0);
+    lastBin = place(normalGroups, restBins, cfg.gap);
+    const zoneAisles = [...new Set(zoneBins.map(b =&gt; b.aisle))];
+    const sharedAssigned = assign.filter(a =&gt; sharedSet.has(a.x));
+    return {assign, unplaced, removed, stay, groups, wasted, endsAt: lastBin, capacity: bins.length,
+      shared: sharedAssigned.length, sharedBins: sharedAssigned.reduce((s2, a) =&gt; s2 + a.bins.length, 0),
+      zone: zoneAisles.length ? (zoneAisles.length &gt; 1 ? `${zoneAisles[0]}–${zoneAisles[zoneAisles.length - 1]}` : zoneAisles[0]) : '', zoneSize: zoneBins.length};
   }
 
   function buildRows(plan, cfg){
@@ -6103,6 +6144,7 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
       unplacedBins: plan.unplaced.reduce((s, x) =&gt; s + x.old.length, 0),
       groups: plan.groups.length, noSeq: plan.groups.filter(g =&gt; !Number.isFinite(g.seq)).length,
       endsAt: plan.endsAt, capacity: plan.capacity, wasted: plan.wasted,
+      shared: plan.shared, sharedBins: plan.sharedBins, zone: plan.zone, zoneSize: plan.zoneSize,
       byRoute: Object.fromEntries(CFG.order.map(r =&gt; [r, plan.assign.filter(a =&gt; a.x.route === r).length]))
     };
     FUT.report = state.report;
@@ -6156,7 +6198,7 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
     let status = '';
     if(r?.error) status = `&lt;b class="warn"&gt;${esc(r.error)}&lt;/b&gt;`;
     else if(FUT.origin === 'archivo') status = `Usando el &lt;b&gt;archivo importado&lt;/b&gt; (${fmt(FUT.stats?.products || 0)} productos). Pulse Regenerar para volver al cálculo automático.`;
-    else if(r) status = `&lt;b class="${r.unplaced ? 'warn' : 'ok'}"&gt;${fmt(r.moved)} productos reubicados&lt;/b&gt; en ${fmt(r.movedBins)} ubicaciones (hasta ${esc(r.endsAt)}) · ${fmt(r.groups)} linesides${r.noSeq ? ` (${fmt(r.noSeq)} sin Pick Sort Sequence, al final de su Route)` : ''} · ${fmt(r.stay)} se quedan${r.removed ? ` · ${fmt(r.removed)} quitados (${fmt(r.removedBins)} ubicaciones)` : ''}${r.unplaced ? ` · &lt;b class="warn"&gt;${fmt(r.unplaced)} productos (${fmt(r.unplacedBins)} ubicaciones) no entran: reduzca las ubicaciones libres&lt;/b&gt;` : ''}`;
+    else if(r) status = `&lt;b class="${r.unplaced ? 'warn' : 'ok'}"&gt;${fmt(r.moved)} productos reubicados&lt;/b&gt; en ${fmt(r.movedBins)} ubicaciones (hasta ${esc(r.endsAt)}) · ${r.shared ? `&lt;b&gt;${fmt(r.shared)} compartidas&lt;/b&gt; (más de un Lineside) en ${fmt(r.sharedBins)} ubicaciones de la zona del medio (${esc(r.zone)}) · ` : ''}${fmt(r.groups)} linesides${r.noSeq ? ` (${fmt(r.noSeq)} sin Pick Sort Sequence, al final de su Route)` : ''} · ${fmt(r.stay)} se quedan${r.removed ? ` · ${fmt(r.removed)} quitados (${fmt(r.removedBins)} ubicaciones)` : ''}${r.unplaced ? ` · &lt;b class="warn"&gt;${fmt(r.unplaced)} productos (${fmt(r.unplacedBins)} ubicaciones) no entran: reduzca las ubicaciones libres&lt;/b&gt;` : ''}`;
     else status = 'Se generará solo al importar Storage Bin, Fixed Bin Assignment, SMART y Pick Sort Sequencing.';
     sec.innerHTML = `
       &lt;div class="table-card-head"&gt;&lt;h2&gt;Escenario futuro · generación automática&lt;/h2&gt;&lt;span class="muted"&gt;${esc(origin)}&lt;/span&gt;&lt;/div&gt;
@@ -6171,6 +6213,7 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
       &lt;/div&gt;
       &lt;div class="fa-actions"&gt;
         &lt;label style="font-size:12px"&gt;&lt;input type="checkbox" id="faAuto" ${CFG.auto ? 'checked' : ''}&gt; Regenerar al importar&lt;/label&gt;
+        &lt;label style="font-size:12px"&gt;&lt;input type="checkbox" id="faShared" ${CFG.shared !== false ? 'checked' : ''}&gt; Zona de compartidas en el medio (más de un Lineside)&lt;/label&gt;
         &lt;button class="btn" id="faRun"&gt;Regenerar&lt;/button&gt;
         &lt;button class="btn" id="faExport"&gt;Exportar archivo futuro&lt;/button&gt;
       &lt;/div&gt;
@@ -6178,6 +6221,7 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
     const val = id =&gt; sec.querySelector('#' + id)?.value;
     sec.querySelector('#faRun')?.addEventListener('click', () =&gt; {
       CFG.order = parseList(val('faOrder')); CFG.keep = parseList(val('faKeep')); CFG.exclude = parseList(val('faExclude'));
+      CFG.shared = !!sec.querySelector('#faShared')?.checked;
       CFG.gap = Math.max(0, Math.min(10, Number(val('faGap')) || 0)); CFG.start = clean(val('faStart')).toUpperCase(); CFG.zone = clean(val('faZone')).toUpperCase() || 'CVPZ';
       saveCfg(); state.manual = false; generate('manual');
     });
@@ -9524,6 +9568,90 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
   window.__Mustang = {apply: () =&gt; applyAppTheme('theme-mustang')};
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () =&gt; setTimeout(bindV76, 900), {once: true});
   else setTimeout(bindV76, 900);
+})();
+;
+
+/* ===== v77-compartidas ===== */
+(() =&gt; {
+  'use strict';
+  /* v77 - Botón «Compartidas»: pinta en el Gemelo 3D las ubicaciones de productos con MÁS DE UN Lineside (p.linesides),
+     igual que «Múltiples» pinta los puestos fijos múltiples, con un selector de color propio. Respeta las reglas de
+     prioridad de v26 (sin SMART, obra, bloqueos, modo ABC). Persistencia: slottingCompartidasV77. */
+  if(typeof binColor !== 'function' || typeof renderLegend !== 'function') return;
+  const KEY = 'slottingCompartidasV77';
+  const SH = {on: false, color: '#ff2fd0'};
+  try{ Object.assign(SH, JSON.parse(localStorage.getItem(KEY) || '{}')); }catch(e){}
+  const save = () =&gt; { try{ localStorage.setItem(KEY, JSON.stringify(SH)); }catch(e){} };
+  const hasSmart = p =&gt; !!(p &amp;&amp; ((Array.isArray(p.smartDetails) &amp;&amp; p.smartDetails.length &gt; 0) || Number(p.ewmYCount) &gt; 0));
+  const nLines = p =&gt; new Set((p?.linesides || []).map(x =&gt; String(x ?? '').trim().toUpperCase()).filter(Boolean)).size;
+  const isShared = b =&gt; !!b?.product &amp;&amp; nLines(State.products?.[b.product]) &gt; 1;
+
+  const baseBinColorV77 = binColor;
+  binColor = function(b){
+    const r = baseBinColorV77.apply(this, arguments);
+    try{
+      if(!SH.on || !b?.product || State.slotting?.visualMode === 'abc') return r;
+      const cfg = State.visualSettings || {}, p = State.products?.[b.product];
+      if(!hasSmart(p) || (typeof isMaintenance === 'function' &amp;&amp; isMaintenance(b))) return r;
+      if(cfg.applyBlockColor &amp;&amp; (b.stockRemovalBlock || b.putawayBlock)) return r;
+      if(nLines(p) &gt; 1) return SH.color;
+    }catch(e){}
+    return r;
+  };
+
+  const baseRenderLegendV77 = renderLegend;
+  renderLegend = function(){
+    const r = baseRenderLegendV77.apply(this, arguments);
+    try{
+      if(!SH.on) return r;
+      const root = document.getElementById('legend') || document.querySelector('.legend');
+      if(!root) return r;
+      const n = getVisibleBins().filter(isShared).length;
+      root.insertAdjacentHTML('beforeend', `&lt;span class="legend-item"&gt;&lt;i class="dot" style="background:${SH.color}"&gt;&lt;/i&gt;Compartidas · más de un Lineside (${n})&lt;/span&gt;`);
+    }catch(e){}
+    return r;
+  };
+
+  function refresh(){
+    try{ Renderer.uploadInstances(); }catch(e){}
+    try{ Renderer.drawCubeValues?.(); Renderer.invalidate?.(true); }catch(e){}
+    try{ renderLegend(); }catch(e){}
+  }
+  function sync(){
+    const b = document.getElementById('btnToggleShared');
+    if(b){ b.classList.toggle('active', SH.on); b.setAttribute('aria-pressed', String(SH.on)); b.style.setProperty('--sh-color', SH.color); }
+    const c = document.getElementById('sharedColor');
+    if(c){ c.value = SH.color; c.style.display = SH.on ? '' : 'none'; }
+  }
+  function ensureUi(){
+    const mult = document.getElementById('btnToggleMultiples');
+    if(!mult) return false;
+    if(document.getElementById('btnToggleShared')) return true;
+    const b = document.createElement('button');
+    b.className = 'btn small scene-toggle'; b.id = 'btnToggleShared'; b.type = 'button';
+    b.title = 'Ver las piezas compartidas (con más de un Lineside) en el color elegido';
+    b.innerHTML = '&lt;span class="sh-glyph"&gt;⇄&lt;/span&gt;&lt;span class="button-text"&gt;Compartidas&lt;/span&gt;';
+    const c = document.createElement('input');
+    c.type = 'color'; c.id = 'sharedColor'; c.title = 'Color de las piezas compartidas';
+    mult.after(b); b.after(c);
+    b.addEventListener('click', () =&gt; {
+      SH.on = !SH.on; save(); sync(); refresh();
+      try{
+        const n = State.bins.filter(isShared).length;
+        toast(SH.on ? `Compartidas: ${n} ubicaciones con más de un Lineside` : 'Compartidas ocultas', 'ok', 2500);
+      }catch(e){}
+    });
+    c.addEventListener('input', () =&gt; { SH.color = c.value; save(); sync(); refresh(); });
+    sync();
+    return true;
+  }
+
+  function bind(){
+    try{ ensureUi(); refresh(); }catch(e){ console.warn('v77:', e); }
+  }
+  window.__Compartidas = {state: SH, isShared, refresh};
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () =&gt; setTimeout(bind, 800), {once: true});
+  else setTimeout(bind, 800);
 })();
 ;
 
