@@ -8,7 +8,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#071225">
 <meta name="slotting-baseline" content="FAVORITA-v14-v18-v19-v20-v21-v22-v23-progress-safe-render">
-<title>Sistema de Slotting 3D Inteligente · v76 · Tema Mustang y color por Lineside</title>
+<title>Sistema de Slotting 3D Inteligente · v77 · Logo de marca oculto con el menú achicado</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300,0,0" rel="stylesheet">
@@ -1276,6 +1276,15 @@ html.no-icon-font .material-symbols-outlined::before{content:attr(data-g);font-f
   /* el resto de la app sigue el tema oscuro */
 </style>
 
+<style id="v77-brand-mark-css">
+  /* v77 - El logo de la marca (pony Mustang / «S3») se oculta cuando el menú lateral se achica u oculta. */
+  .sidebar.collapsed .brand-mark{display:none !important}
+  .sidebar.collapsed .brand{justify-content:center}
+  @media (max-width: 760px){
+    .sidebar:not(.mobile-open) .brand-mark{display:none !important}
+    .sidebar.mobile-open.collapsed .brand-mark{display:block !important}
+  }
+</style>
 <textarea id="slotting-sp-code" style="display:none" aria-hidden="true" tabindex="-1">
 /* Slotting 3D · compilación para SharePoint (todos los bloques en un solo ámbito) */
 (function(){
@@ -8517,7 +8526,7 @@ loading(true,'Inicializando Sistema de Slotting 3D...',12,'Cargando datos precar
        glifos Unicode del sistema.
      - Ya cumplido por la app (v41): guarda de window.define en &lt;head&gt;, restauración al final, sin &lt;script src&gt;,
        un solo HTML, guarda de doble inicio (window.__slotting3dInitialized), sin alert/confirm/prompt nativos. */
-  const BUILD = {version: 'v76', date: '2026-11-13', file: 'Slotting-3D.html'};
+  const BUILD = {version: 'v77', date: '2026-11-13', file: 'Slotting-3D.html'};
   window.__SLOTTING_BUILD = BUILD;
 
   function marker(){
